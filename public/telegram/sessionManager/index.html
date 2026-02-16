@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="ru">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Управление аккаунтами Telegram</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🔐 Управление аккаунтами</h1>
+        </div>
+
+        <div class="card">
+            <div class="alert alert-success" id="successAlert"></div>
+            <div class="alert alert-error" id="errorAlert"></div>
+
+            <div class="domain-info">
+                <label>Текущий домен:</label>
+                <div class="domain-value" id="currentDomain">
+                    <span id="domainText">Загрузка...</span>
+                    <span class="domain-loading spinner" style="width: 20px; height: 20px; display: inline-block;"></span>
+                </div>
+                <input type="hidden" id="domainHidden" name="domain">
+            </div>
+
+            <div id="sessionsContainer" class="sessions-list">
+                <div id="sessionsList"></div>
+                <button class="btn btn-primary btn-add" id="addSessionBtn" disabled>
+                    ➕ Добавить новый аккаунт
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Модальное окно создания сессии -->
+    <div class="modal" id="createSessionModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Создание нового аккаунта</h2>
+            </div>
+            <form id="createSessionForm">
+                <input type="hidden" id="modalDomain" name="domain">
+                <div class="form-group">
+                    <label for="sessionName">Название аккаунта:</label>
+                    <input type="text" id="sessionName" name="session_name" placeholder="Например: main_account" required>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-danger" id="cancelBtn">Отмена</button>
+                    <button type="submit" class="btn btn-success">Создать</button>
+                </div>
+            </form>
+        </div>
+    </div>
+    
+    <script src="https://api.bitrix24.com/api/v1/"></script>
+    <script src="app.js"></script>
+</body>
+
+</html>
