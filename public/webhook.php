@@ -46,7 +46,7 @@ try {
     $data = json_decode($input, true) ?: [];
     
     // Объединяем POST данные и JSON данные
-    $data = array_merge($_REQUEST, $data);
+    $data = array_merge($_REQUEST, $data, $_GET);
 
     $logger->info('Webhook received', [
         'method' => $_SERVER['REQUEST_METHOD'],
