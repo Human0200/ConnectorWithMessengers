@@ -1,0 +1,642 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ConnectHub</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600&display=swap" rel="stylesheet">
+<style>
+*,::before,::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#f7f6f2;--white:#fff;--ink:#18181b;--ink2:#3f3f46;--muted:#a1a1aa;
+  --border:#e4e4e7;--border2:#d4d4d8;--accent:#2563eb;--accent-h:#1d4ed8;--accent-l:#eff6ff;
+  --green:#16a34a;--green-l:#f0fdf4;--red:#dc2626;--red-l:#fef2f2;--amber:#d97706;--amber-l:#fffbeb;
+  --sans:'DM Sans',system-ui,sans-serif;--serif:'Instrument Serif',Georgia,serif;--mono:'JetBrains Mono','Fira Code',monospace;
+  --r:10px;--sh:0 1px 2px rgba(0,0,0,.06),0 4px 12px rgba(0,0,0,.04);--sh2:0 4px 16px rgba(0,0,0,.08),0 24px 48px rgba(0,0,0,.06);
+}
+html{font-size:15px;background:var(--bg);color:var(--ink);font-family:var(--sans);-webkit-font-smoothing:antialiased}
+body{min-height:100vh}
+button{font-family:var(--sans);cursor:pointer;border:none;background:none}
+input,select{font-family:var(--sans)}
+a{color:var(--accent);text-decoration:none}
+.screen{display:none;min-height:100vh}
+.screen.active{display:flex}
+
+/* AUTH */
+.auth-screen{align-items:center;justify-content:center;background:var(--bg);position:relative;overflow:hidden}
+.auth-deco{position:absolute;inset:0;pointer-events:none;background:radial-gradient(circle 700px at 15% 15%,rgba(37,99,235,.07) 0%,transparent 60%),radial-gradient(circle 500px at 85% 85%,rgba(22,163,74,.05) 0%,transparent 60%)}
+.auth-dots{position:absolute;inset:0;pointer-events:none;background-image:radial-gradient(circle,var(--border) 1px,transparent 1px);background-size:28px 28px;opacity:.6}
+.auth-card{position:relative;z-index:1;background:var(--white);border:1px solid var(--border);border-radius:16px;box-shadow:var(--sh2);padding:44px 40px;width:420px;max-width:calc(100vw - 32px);animation:up .3s ease both}
+@keyframes up{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:translateY(0)}}
+.logo{display:flex;align-items:center;gap:10px;margin-bottom:36px}
+.logo-mark{width:36px;height:36px;border-radius:9px;background:var(--ink);color:#fff;display:flex;align-items:center;justify-content:center;font-size:17px;flex-shrink:0}
+.logo-name{font-family:var(--serif);font-size:19px}
+.auth-heading{font-family:var(--serif);font-size:27px;line-height:1.15;margin-bottom:5px}
+.auth-sub{font-size:13px;color:var(--muted);margin-bottom:30px;line-height:1.5}
+.f{margin-bottom:15px}
+.f label{display:block;font-size:12px;font-weight:500;color:var(--ink2);margin-bottom:5px}
+.f input{width:100%;padding:10px 13px;font-size:14px;border:1.5px solid var(--border);border-radius:8px;outline:none;color:var(--ink);background:var(--white);transition:border .15s,box-shadow .15s}
+.f input:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(37,99,235,.1)}
+.f input::placeholder{color:var(--muted)}
+.ferr{font-size:11px;color:var(--red);margin-top:4px;display:none}
+.f.bad input{border-color:var(--red)}
+.f.bad .ferr{display:block}
+.alert{font-size:13px;padding:10px 13px;border-radius:8px;margin-bottom:14px;background:var(--red-l);color:var(--red);border:1px solid rgba(220,38,38,.15);display:none}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:7px;padding:10px 18px;border-radius:8px;font-size:14px;font-weight:500;transition:all .15s;white-space:nowrap;cursor:pointer;border:none}
+.btn:disabled{opacity:.5;pointer-events:none}
+.btn:active:not(:disabled){transform:scale(.98)}
+.btn-dark{background:var(--ink);color:#fff}
+.btn-dark:hover{background:#27272a}
+.btn-outline{background:transparent;color:var(--ink);border:1.5px solid var(--border)}
+.btn-outline:hover{border-color:var(--border2);background:var(--bg)}
+.btn-accent{background:var(--accent);color:#fff}
+.btn-accent:hover{background:var(--accent-h)}
+.btn-danger{background:transparent;color:var(--red);border:1.5px solid rgba(220,38,38,.2)}
+.btn-danger:hover{background:var(--red-l)}
+.btn-block{width:100%;padding:12px}
+.btn-sm{padding:6px 12px;font-size:12px;border-radius:7px}
+.auth-switch{text-align:center;margin-top:18px;font-size:13px;color:var(--muted)}
+.auth-switch a{color:var(--accent);font-weight:500}
+
+/* APP */
+.app-screen{flex-direction:row}
+.sidebar{width:228px;flex-shrink:0;height:100vh;position:sticky;top:0;background:var(--white);border-right:1px solid var(--border);display:flex;flex-direction:column;overflow-y:auto}
+.sb-logo{padding:20px 16px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px}
+.sb-logo-mark{width:30px;height:30px;border-radius:8px;background:var(--ink);color:#fff;display:flex;align-items:center;justify-content:center;font-size:14px;flex-shrink:0}
+.sb-logo-name{font-family:var(--serif);font-size:16px}
+.sb-nav{padding:10px 8px;flex:1}
+.sb-label{font-size:10px;font-weight:600;letter-spacing:1.2px;text-transform:uppercase;color:var(--muted);padding:0 8px;margin:16px 0 5px}
+.sb-label:first-child{margin-top:4px}
+.sb-item{display:flex;align-items:center;gap:9px;width:100%;text-align:left;padding:8px 9px;border-radius:8px;font-size:13px;color:var(--ink2);transition:all .1s}
+.sb-item:hover{background:var(--bg);color:var(--ink)}
+.sb-item.on{background:var(--accent-l);color:var(--accent);font-weight:500}
+.sb-icon{width:20px;text-align:center;font-size:14px;flex-shrink:0}
+.sb-user{padding:12px 14px;border-top:1px solid var(--border);display:flex;align-items:center;gap:9px}
+.sb-avatar{width:32px;height:32px;border-radius:50%;background:var(--ink);color:#fff;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:600;flex-shrink:0}
+.sb-uname{font-size:13px;font-weight:500;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sb-uemail{font-size:11px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sb-logout{color:var(--muted);font-size:15px;padding:4px;border-radius:5px;transition:color .1s}
+.sb-logout:hover{color:var(--red)}
+.main{flex:1;overflow-y:auto;background:var(--bg)}
+.page{display:none;padding:36px 32px;max-width:840px;animation:fadeIn .18s ease}
+.page.on{display:block}
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+.ph{margin-bottom:28px}
+.ph-title{font-family:var(--serif);font-size:28px;line-height:1.2;margin-bottom:4px}
+.ph-sub{font-size:13px;color:var(--muted)}
+.card{background:var(--white);border:1px solid var(--border);border-radius:var(--r);padding:22px;box-shadow:var(--sh)}
+.card+.card{margin-top:12px}
+.card-title{font-size:11px;font-weight:600;letter-spacing:.8px;text-transform:uppercase;margin-bottom:14px;color:var(--muted)}
+.row{display:flex;align-items:center;justify-content:space-between;gap:12px}
+
+/* TOKEN HERO */
+.token-hero{background:var(--ink);border-radius:12px;padding:24px 26px;color:#fff;position:relative;overflow:hidden;margin-bottom:22px}
+.token-hero::before{content:'';position:absolute;top:-40px;right:-40px;width:200px;height:200px;border-radius:50%;background:rgba(255,255,255,.03);pointer-events:none}
+.th-eyebrow{font-size:10px;font-weight:600;letter-spacing:1.4px;text-transform:uppercase;opacity:.45;margin-bottom:6px}
+.th-title{font-family:var(--serif);font-size:20px;margin-bottom:5px}
+.th-desc{font-size:12px;opacity:.5;line-height:1.7;margin-bottom:18px}
+.th-box{background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.1);border-radius:8px;padding:11px 14px;display:flex;align-items:flex-start;gap:10px}
+.th-val{flex:1;font-family:var(--mono);font-size:12px;word-break:break-all;line-height:1.6;opacity:.88;letter-spacing:.2px}
+.th-copy{flex-shrink:0;padding:6px 13px;border-radius:6px;background:rgba(255,255,255,.12);color:#fff;font-size:12px;font-weight:500;border:none;cursor:pointer;transition:background .15s}
+.th-copy:hover{background:rgba(255,255,255,.22)}
+.th-regen{margin-top:11px;font-size:11px;opacity:.35;cursor:pointer;border:none;background:none;color:#fff;text-decoration:underline;text-underline-offset:2px;padding:0}
+.th-regen:hover{opacity:.65}
+
+/* STATS */
+.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:22px}
+.stat{background:var(--white);border:1px solid var(--border);border-radius:var(--r);padding:16px 18px}
+.stat-n{font-family:var(--serif);font-size:30px;line-height:1}
+.stat-l{font-size:11px;color:var(--muted);margin-top:3px}
+
+/* PROFILE CARDS */
+.pc{background:var(--white);border:1px solid var(--border);border-radius:var(--r);padding:15px 18px;display:flex;align-items:center;gap:13px;transition:border-color .12s,box-shadow .12s}
+.pc:hover{border-color:var(--border2);box-shadow:var(--sh)}
+.pc+.pc{margin-top:8px}
+.pc-icon{width:40px;height:40px;border-radius:9px;display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0}
+.pc-info{flex:1;min-width:0}
+.pc-name{font-weight:600;font-size:14px}
+.pc-meta{font-size:11px;color:var(--muted);margin-top:3px;display:flex;align-items:center;gap:5px;flex-wrap:wrap}
+.badge{display:inline-block;padding:2px 8px;border-radius:20px;font-size:10px;font-weight:600;letter-spacing:.2px}
+.bg-max{background:#fff0f0;color:#c53030}
+.bg-tgbot{background:#ebf8ff;color:#2b6cb0}
+.bg-tgu{background:#f0e6ff;color:#6b21a8}
+.bg-green{background:var(--green-l);color:var(--green)}
+.bg-red{background:var(--red-l);color:var(--red)}
+.bg-amber{background:var(--amber-l);color:var(--amber)}
+
+/* EMPTY */
+.empty{text-align:center;padding:44px 24px;color:var(--muted)}
+.empty-ico{font-size:36px;display:block;margin-bottom:10px;opacity:.4}
+.empty-t{font-family:var(--serif);font-size:17px;color:var(--ink2);margin-bottom:5px}
+.empty-s{font-size:12px;line-height:1.7}
+
+/* MODAL */
+.mb{position:fixed;inset:0;background:rgba(0,0,0,.35);backdrop-filter:blur(4px);z-index:100;display:none;align-items:center;justify-content:center;padding:16px}
+.mb.open{display:flex}
+.modal{background:var(--white);border:1px solid var(--border);border-radius:14px;width:460px;max-width:100%;box-shadow:var(--sh2);animation:up .2s ease;overflow:hidden}
+.mh{padding:20px 24px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between}
+.mh-t{font-family:var(--serif);font-size:20px}
+.mclose{color:var(--muted);font-size:20px;padding:2px;line-height:1;transition:color .1s}
+.mclose:hover{color:var(--ink)}
+.mbody{padding:22px 24px}
+.mfooter{padding:14px 24px;border-top:1px solid var(--border);display:flex;gap:8px;justify-content:flex-end}
+.mf{margin-bottom:14px}
+.mf label{display:block;font-size:12px;font-weight:500;color:var(--ink2);margin-bottom:4px}
+.mf input,.mf select{width:100%;padding:9px 12px;font-size:14px;border:1.5px solid var(--border);border-radius:8px;outline:none;color:var(--ink);background:var(--white);transition:border .15s}
+.mf input:focus,.mf select:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(37,99,235,.1)}
+.mf select{appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath fill='%23a1a1aa' d='M5 6L0 0h10z'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 12px center;padding-right:30px}
+.mferr{font-size:11px;color:var(--red);margin-top:3px;display:none}
+.ib{background:var(--accent-l);border:1px solid rgba(37,99,235,.12);border-radius:8px;padding:11px 13px;font-size:12px;color:var(--ink2);line-height:1.6;margin-bottom:14px}
+.ib.warn{background:var(--amber-l);border-color:rgba(217,119,6,.15)}
+
+/* TABS */
+.tabs{display:flex;gap:2px;border-bottom:1px solid var(--border);margin-bottom:20px}
+.tab{padding:9px 15px;font-size:13px;font-weight:500;color:var(--muted);border-bottom:2px solid transparent;margin-bottom:-1px;transition:all .12s}
+.tab.on{color:var(--accent);border-bottom-color:var(--accent)}
+.tab:hover:not(.on){color:var(--ink)}
+.tp{display:none}
+.tp.on{display:block}
+
+/* CONFIRM */
+#confirmBox{position:fixed;inset:0;background:rgba(0,0,0,.35);backdrop-filter:blur(4px);z-index:200;display:none;align-items:center;justify-content:center}
+#confirmBox.open{display:flex}
+.cb{background:var(--white);border:1px solid var(--border);border-radius:12px;padding:24px;width:340px;box-shadow:var(--sh2);animation:up .2s ease}
+.cb-t{font-family:var(--serif);font-size:18px;margin-bottom:6px}
+.cb-s{font-size:13px;color:var(--muted);margin-bottom:20px;line-height:1.5}
+.cb-btns{display:flex;gap:8px;justify-content:flex-end}
+
+/* TOAST */
+#toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(6px);background:var(--ink);color:#fff;border-radius:8px;padding:9px 18px;font-size:13px;z-index:300;opacity:0;transition:all .22s;pointer-events:none;box-shadow:0 4px 16px rgba(0,0,0,.2)}
+#toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+#toast.ok{background:var(--green)}
+#toast.err{background:var(--red)}
+
+.spin{width:15px;height:15px;border:2px solid rgba(255,255,255,.25);border-top-color:#fff;border-radius:50%;animation:rot .6s linear infinite;display:inline-block}
+.spin.dk{border:2px solid var(--border);border-top-color:var(--ink)}
+@keyframes rot{to{transform:rotate(360deg)}}
+@media(max-width:720px){.sidebar{display:none}.stats{grid-template-columns:repeat(2,1fr)}.page{padding:20px 16px}}
+</style>
+</head>
+<body>
+
+<!-- LOGIN -->
+<div id="sLogin" class="screen auth-screen active">
+  <div class="auth-deco"></div><div class="auth-dots"></div>
+  <div class="auth-card">
+    <div class="logo"><div class="logo-mark">⚡</div><span class="logo-name">ConnectHub</span></div>
+    <div class="auth-heading">Вход в аккаунт</div>
+    <div class="auth-sub">Управляйте профилями мессенджеров</div>
+    <div id="loginAlert" class="alert"></div>
+    <div class="f" id="lf1"><label>Email</label><input type="email" id="lEmail" placeholder="you@example.com" autocomplete="email"><div class="ferr" id="lEmailE"></div></div>
+    <div class="f" id="lf2"><label>Пароль</label><input type="password" id="lPass" placeholder="••••••••" autocomplete="current-password" onkeydown="if(event.key==='Enter')doLogin()"><div class="ferr" id="lPassE"></div></div>
+    <button class="btn btn-dark btn-block" id="loginBtn" onclick="doLogin()">Войти</button>
+    <div class="auth-switch">Нет аккаунта? <a href="#" onclick="goScreen('sRegister')">Зарегистрироваться</a></div>
+  </div>
+</div>
+
+<!-- REGISTER -->
+<div id="sRegister" class="screen auth-screen">
+  <div class="auth-deco"></div><div class="auth-dots"></div>
+  <div class="auth-card">
+    <div class="logo"><div class="logo-mark">⚡</div><span class="logo-name">ConnectHub</span></div>
+    <div class="auth-heading">Создать аккаунт</div>
+    <div class="auth-sub">Начните принимать сообщения из мессенджеров в Bitrix24</div>
+    <div id="regAlert" class="alert"></div>
+    <div class="f" id="rf1"><label>Имя</label><input type="text" id="rName" placeholder="Иван Иванов" autocomplete="name"><div class="ferr" id="rNameE"></div></div>
+    <div class="f" id="rf2"><label>Email</label><input type="email" id="rEmail" placeholder="you@example.com" autocomplete="email"><div class="ferr" id="rEmailE"></div></div>
+    <div class="f" id="rf3"><label>Пароль</label><input type="password" id="rPass" placeholder="мин. 8 символов" autocomplete="new-password" onkeydown="if(event.key==='Enter')doRegister()"><div class="ferr" id="rPassE"></div></div>
+    <button class="btn btn-dark btn-block" id="regBtn" onclick="doRegister()">Создать аккаунт</button>
+    <div class="auth-switch">Есть аккаунт? <a href="#" onclick="goScreen('sLogin')">Войти</a></div>
+  </div>
+</div>
+
+<!-- APP -->
+<div id="sApp" class="screen app-screen">
+  <aside class="sidebar">
+    <div class="sb-logo"><div class="sb-logo-mark">⚡</div><span class="sb-logo-name">ConnectHub</span></div>
+    <nav class="sb-nav">
+      <div class="sb-label">Главное</div>
+      <button class="sb-item on" onclick="nav('Dashboard',this)"><span class="sb-icon">◻</span> Обзор</button>
+      <button class="sb-item" onclick="nav('Profiles',this)">
+        <span class="sb-icon">◈</span> Профили
+        <span id="sbBadge" style="margin-left:auto;background:var(--accent);color:#fff;font-size:10px;font-weight:600;border-radius:10px;padding:1px 6px;display:none"></span>
+      </button>
+      <div class="sb-label">Аккаунт</div>
+      <button class="sb-item" onclick="nav('Settings',this)"><span class="sb-icon">◎</span> Настройки</button>
+    </nav>
+    <div class="sb-user">
+      <div class="sb-avatar" id="sbAvatar">И</div>
+      <div style="flex:1;min-width:0"><div class="sb-uname" id="sbName">...</div><div class="sb-uemail" id="sbEmail"></div></div>
+      <button class="sb-logout" onclick="doLogout()" title="Выйти">⏏</button>
+    </div>
+  </aside>
+
+  <main class="main">
+
+    <!-- DASHBOARD -->
+    <div id="pDashboard" class="page on">
+      <div class="ph"><div class="ph-title">Обзор</div><div class="ph-sub">Ваш личный кабинет ConnectHub</div></div>
+
+      <div class="token-hero">
+        <div class="th-eyebrow">API-токен аккаунта</div>
+        <div class="th-title">Ваш токен для подключения к Bitrix24</div>
+        <div class="th-desc">Вставьте этот токен в настройки приложения Bitrix24 или другого сервиса. Он идентифицирует ваш аккаунт и даёт доступ ко всем вашим профилям мессенджеров.</div>
+        <div class="th-box">
+          <div class="th-val" id="heroToken">Загрузка...</div>
+          <button class="th-copy" onclick="copyToken()">Скопировать</button>
+        </div>
+        <button class="th-regen" onclick="regenToken()">Перегенерировать токен</button>
+      </div>
+
+      <div class="stats">
+        <div class="stat"><div class="stat-n" id="stTotal">—</div><div class="stat-l">Профилей</div></div>
+        <div class="stat"><div class="stat-n" id="stActive">—</div><div class="stat-l">Активных</div></div>
+        <div class="stat"><div class="stat-n" id="stTypes">—</div><div class="stat-l">Типов мессенджеров</div></div>
+      </div>
+
+      <div class="card">
+        <div class="row" style="margin-bottom:14px">
+          <div class="card-title" style="margin-bottom:0">Профили мессенджеров</div>
+          <button class="btn btn-outline btn-sm" onclick="nav('Profiles',document.querySelectorAll('.sb-item')[1])">Все →</button>
+        </div>
+        <div id="dashProfiles"><div class="empty"><span class="spin dk"></span></div></div>
+      </div>
+    </div>
+
+    <!-- PROFILES -->
+    <div id="pProfiles" class="page">
+      <div class="ph">
+        <div class="row">
+          <div><div class="ph-title">Профили мессенджеров</div><div class="ph-sub">Max, Telegram Bot, Telegram User</div></div>
+          <button class="btn btn-dark" onclick="openNewProfile()">+ Добавить профиль</button>
+        </div>
+      </div>
+      <div id="profilesList"><div class="empty"><span class="spin dk"></span></div></div>
+    </div>
+
+    <!-- SETTINGS -->
+    <div id="pSettings" class="page">
+      <div class="ph"><div class="ph-title">Настройки</div></div>
+      <div class="tabs">
+        <button class="tab on" onclick="stab('stProfile',this)">Профиль</button>
+        <button class="tab" onclick="stab('stPassword',this)">Пароль</button>
+        <button class="tab" onclick="stab('stToken',this)">API-токен</button>
+      </div>
+      <div id="stProfile" class="tp on" style="max-width:420px">
+        <div class="card">
+          <div class="mf"><label>Имя</label><input type="text" id="sName" placeholder="Ваше имя"></div>
+          <div class="mf"><label>Email</label><input type="email" id="sEmail" disabled style="opacity:.55"></div>
+          <button class="btn btn-dark" onclick="saveName()">Сохранить</button>
+        </div>
+      </div>
+      <div id="stPassword" class="tp" style="max-width:420px">
+        <div class="card">
+          <div class="mf"><label>Текущий пароль</label><input type="password" id="curPass" placeholder="••••••••"></div>
+          <div class="mf"><label>Новый пароль</label><input type="password" id="newPass" placeholder="••••••••"></div>
+          <button class="btn btn-dark" onclick="savePass()">Изменить пароль</button>
+        </div>
+      </div>
+      <div id="stToken" class="tp" style="max-width:540px">
+        <div class="card">
+          <div class="card-title">API-токен аккаунта</div>
+          <div class="ib">Этот токен вставляется в настройки приложения Bitrix24. Он даёт доступ ко всем вашим профилям от вашего имени. Не передавайте его посторонним.</div>
+          <div style="background:var(--bg);border:1.5px solid var(--border);border-radius:8px;padding:12px 14px;font-family:var(--mono);font-size:12px;word-break:break-all;color:var(--ink2);line-height:1.7;display:flex;align-items:flex-start;gap:10px;margin-bottom:14px">
+            <div style="flex:1" id="settingsToken">—</div>
+            <button class="btn btn-outline btn-sm" onclick="copyToken()">Копировать</button>
+          </div>
+          <button class="btn btn-danger btn-sm" onclick="regenToken()">⚠ Перегенерировать токен</button>
+          <div style="font-size:11px;color:var(--muted);margin-top:8px;line-height:1.6">После перегенерации старый токен перестанет работать. Нужно будет вставить новый в настройки Bitrix24.</div>
+        </div>
+      </div>
+    </div>
+
+  </main>
+</div>
+
+<!-- MODAL: New Profile -->
+<div class="mb" id="mNew">
+  <div class="modal">
+    <div class="mh"><div class="mh-t">Новый профиль</div><button class="mclose" onclick="closeM('mNew')">✕</button></div>
+    <div class="mbody">
+      <div class="mf">
+        <label>Тип мессенджера</label>
+        <select id="npType" onchange="onTypeChange()">
+          <option value="">— Выберите —</option>
+          <option value="max">Max</option>
+          <option value="telegram_bot">Telegram Bot</option>
+          <option value="telegram_user">Telegram User (MadelineProto)</option>
+        </select>
+      </div>
+      <div class="ib" id="npHint" style="display:none"></div>
+      <div class="mf"><label>Название профиля</label><input type="text" id="npName" placeholder="Например: Основной Max"></div>
+      <div class="mf" id="npTokenF" style="display:none">
+        <label id="npTokenL">Токен</label>
+        <input type="text" id="npToken" placeholder="">
+        <div class="mferr" id="npTokenE"></div>
+      </div>
+    </div>
+    <div class="mfooter">
+      <button class="btn btn-outline" onclick="closeM('mNew')">Отмена</button>
+      <button class="btn btn-dark" onclick="submitNew()">Создать профиль</button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL: Edit Profile -->
+<div class="mb" id="mEdit">
+  <div class="modal">
+    <div class="mh"><div class="mh-t" id="mEditTitle">Профиль</div><button class="mclose" onclick="closeM('mEdit')">✕</button></div>
+    <div class="mbody" id="mEditBody"></div>
+    <div class="mfooter">
+      <button class="btn btn-danger btn-sm" id="mEditDel">Удалить профиль</button>
+      <button class="btn btn-outline" onclick="closeM('mEdit')">Закрыть</button>
+    </div>
+  </div>
+</div>
+
+<!-- CONFIRM -->
+<div id="confirmBox">
+  <div class="cb">
+    <div class="cb-t" id="cbTitle">Подтвердите</div>
+    <div class="cb-s" id="cbText"></div>
+    <div class="cb-btns">
+      <button class="btn btn-outline btn-sm" onclick="cbDone(false)">Отмена</button>
+      <button class="btn btn-danger btn-sm" onclick="cbDone(true)">Подтвердить</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+const API_URL = './user_api.php';
+let me = null, profiles = [], _cbRes = null;
+
+// BOOT
+(async()=>{
+  try{const r=await api('/auth/me');if(r.success){me=r.user;enterApp();}else goScreen('sLogin');}
+  catch{goScreen('sLogin');}
+})();
+
+function enterApp(){goScreen('sApp');setSbUser();loadProfiles();}
+
+// AUTH
+async function doLogin(){
+  const email=g('lEmail'),pass=g('lPass');
+  clearF(['lf1','lf2']);G('loginAlert').style.display='none';
+  if(!email)return fe('lf1','lEmailE','Введите email');
+  if(!pass)return fe('lf2','lPassE','Введите пароль');
+  loading('loginBtn',true,'Вход...');
+  try{
+    const r=await api('/auth/login','POST',{email,password:pass});
+    if(r.success){me=r.user;enterApp();}
+    else{
+      const e=r.errors||{};
+      if(e.email)fe('lf1','lEmailE',e.email);
+      if(e.password)fe('lf2','lPassE',e.password);
+      if(e.general)showAlert('loginAlert',e.general);
+    }
+  }catch{showAlert('loginAlert','Ошибка соединения');}
+  loading('loginBtn',false,'Войти');
+}
+
+async function doRegister(){
+  const name=g('rName'),email=g('rEmail'),pass=g('rPass');
+  clearF(['rf1','rf2','rf3']);G('regAlert').style.display='none';
+  if(!name)return fe('rf1','rNameE','Введите имя');
+  if(!email)return fe('rf2','rEmailE','Введите email');
+  if(!pass)return fe('rf3','rPassE','Введите пароль (мин. 8 символов)');
+  loading('regBtn',true,'Создание...');
+  try{
+    const r=await api('/auth/register','POST',{name,email,password:pass});
+    if(r.success){me=r.user;enterApp();}
+    else{
+      const e=r.errors||{};
+      if(e.name)fe('rf1','rNameE',e.name);
+      if(e.email)fe('rf2','rEmailE',e.email);
+      if(e.password)fe('rf3','rPassE',e.password);
+      if(e.general)showAlert('regAlert',e.general);
+    }
+  }catch{showAlert('regAlert','Ошибка соединения');}
+  loading('regBtn',false,'Создать аккаунт');
+}
+
+async function doLogout(){
+  await api('/auth/logout','POST').catch(()=>{});
+  me=null;profiles=[];goScreen('sLogin');
+}
+
+// PROFILES
+async function loadProfiles(){
+  try{
+    const r=await api('/profiles');
+    if(r.success){
+      profiles=r.profiles||[];
+      renderToken();renderStats();renderDash();renderList();
+      const b=G('sbBadge');
+      if(profiles.length){b.textContent=profiles.length;b.style.display='';}
+      else b.style.display='none';
+    }
+  }catch{}
+}
+
+function renderToken(){
+  const t=me?.api_token||'—';
+  G('heroToken').textContent=t;
+  G('settingsToken').textContent=t;
+}
+
+function renderStats(){
+  G('stTotal').textContent=profiles.length;
+  G('stActive').textContent=profiles.filter(p=>p.is_active==1).length;
+  G('stTypes').textContent=new Set(profiles.map(p=>p.messenger_type)).size;
+}
+
+function renderDash(){
+  const el=G('dashProfiles'),sl=profiles.slice(0,4);
+  if(!sl.length){el.innerHTML=`<div class="empty" style="padding:20px 0"><span style="font-size:11px;color:var(--muted)">Нет профилей — <a href="#" onclick="openNewProfile()">добавить первый</a></span></div>`;return;}
+  el.innerHTML=sl.map(profileCard).join('');
+}
+
+function renderList(){
+  const el=G('profilesList');
+  if(!profiles.length){el.innerHTML=`<div class="empty"><span class="empty-ico">◈</span><div class="empty-t">Нет профилей</div><div class="empty-s">Добавьте профиль мессенджера — Max, Telegram Bot или Telegram User.<br>Каждый профиль — отдельный аккаунт мессенджера.</div><button class="btn btn-dark" style="margin-top:16px" onclick="openNewProfile()">+ Добавить профиль</button></div>`;return;}
+  el.innerHTML=profiles.map(profileCard).join('');
+}
+
+function profileCard(p){
+  const m=mInfo(p.messenger_type);
+  return `<div class="pc">
+    <div class="pc-icon" style="${m.bg}">${m.ico}</div>
+    <div class="pc-info">
+      <div class="pc-name">${esc(p.name)}</div>
+      <div class="pc-meta">
+        <span class="badge ${m.bc}">${m.lbl}</span>
+        <span class="badge ${p.is_active==1?'bg-green':'bg-red'}">${p.is_active==1?'Активен':'Отключён'}</span>
+      </div>
+    </div>
+    <button class="btn btn-outline btn-sm" onclick="openEdit(${p.id})">Изменить</button>
+  </div>`;
+}
+
+function openNewProfile(){
+  G('npType').value='';G('npName').value='';G('npToken').value='';
+  G('npHint').style.display='none';G('npTokenF').style.display='none';G('npTokenE').style.display='none';
+  openM('mNew');
+}
+
+function onTypeChange(){
+  const t=G('npType').value;
+  const H={
+    max:{lbl:'API токен Max',ph:'Вставьте токен из кабинета Max',hint:'🔑 Личный кабинет Max → Профиль → Токен API'},
+    telegram_bot:{lbl:'Bot Token',ph:'123456789:ABCdef...',hint:'🤖 Получите токен у @BotFather в Telegram → /newbot'},
+    telegram_user:{hint:'👤 Telegram User работает через MadelineProto. Токен не нужен — авторизация происходит через QR-код после создания профиля.'},
+  };
+  const info=H[t];
+  if(!t||!info){G('npHint').style.display='none';G('npTokenF').style.display='none';return;}
+  G('npHint').textContent=info.hint;G('npHint').style.display='block';
+  if(t==='telegram_user'){G('npTokenF').style.display='none';}
+  else{G('npTokenL').textContent=info.lbl;G('npToken').placeholder=info.ph;G('npTokenF').style.display='block';}
+}
+
+async function submitNew(){
+  const type=G('npType').value,name=g('npName'),token=g('npToken');
+  G('npTokenE').style.display='none';
+  if(!type)return toast('Выберите тип мессенджера','err');
+  if(!name)return toast('Введите название профиля','err');
+  if(['max','telegram_bot'].includes(type)&&!token){G('npTokenE').textContent='Токен обязателен';G('npTokenE').style.display='block';return;}
+  try{
+    const r=await api('/profiles','POST',{messenger_type:type,name,token:token||null});
+    if(r.success){toast('Профиль создан!','ok');closeM('mNew');loadProfiles();}
+    else toast(r.errors?.general||r.errors?.token||r.error||'Ошибка','err');
+  }catch{toast('Ошибка соединения','err');}
+}
+
+async function openEdit(id){
+  const r=await api('/profiles/'+id);
+  if(!r.success){toast('Не удалось загрузить','err');return;}
+  const p=r.profile,m=mInfo(p.messenger_type);
+  G('mEditTitle').textContent=p.name;
+  G('mEditDel').onclick=()=>deleteProfile(id);
+  G('mEditBody').innerHTML=`
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:20px;padding:14px;background:var(--bg);border-radius:10px">
+      <div style="width:44px;height:44px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:20px;${m.bg}">${m.ico}</div>
+      <div>
+        <div style="font-weight:600;font-size:15px">${esc(p.name)}</div>
+        <span class="badge ${m.bc}">${m.lbl}</span>
+        <span class="badge ${p.is_active==1?'bg-green':'bg-red'}" style="margin-left:4px">${p.is_active==1?'Активен':'Отключён'}</span>
+      </div>
+    </div>
+    <div class="mf"><label>Название</label><input type="text" id="eName" value="${esc(p.name)}"></div>
+    ${p.messenger_type!=='telegram_user'?`<div class="mf"><label>${p.messenger_type==='max'?'API токен Max':'Bot Token'} <span style="color:var(--muted);font-weight:400">(оставьте пустым чтобы не менять)</span></label><input type="text" id="eToken" placeholder="Новый токен..."></div>`:''}
+    <div class="mf"><label>Статус</label><select id="eActive"><option value="1" ${p.is_active==1?'selected':''}>Активен</option><option value="0" ${p.is_active==0?'selected':''}>Отключён</option></select></div>
+    <button class="btn btn-accent" onclick="saveEdit(${id})">Сохранить изменения</button>`;
+  openM('mEdit');
+}
+
+async function saveEdit(id){
+  const name=g('eName'),token=g('eToken'),active=G('eActive')?.value;
+  if(!name)return toast('Введите название','err');
+  const data={name,is_active:parseInt(active)};
+  if(token)data.token=token;
+  const r=await api('/profiles/'+id,'PATCH',data);
+  if(r.success){toast('Сохранено','ok');closeM('mEdit');loadProfiles();}
+  else toast(r.error||'Ошибка','err');
+}
+
+async function deleteProfile(id){
+  const ok=await confirm2('Удалить профиль?','Это действие нельзя отменить.');
+  if(!ok)return;
+  const r=await api('/profiles/'+id,'DELETE');
+  if(r.success){toast('Профиль удалён','ok');closeM('mEdit');loadProfiles();}
+  else toast('Ошибка','err');
+}
+
+// TOKEN
+async function copyToken(){
+  const t=me?.api_token;if(!t)return;
+  try{await navigator.clipboard.writeText(t);toast('Токен скопирован!','ok');}
+  catch{prompt('Скопируйте токен:',t);}
+}
+
+async function regenToken(){
+  const ok=await confirm2('Перегенерировать токен?','Старый токен сразу перестанет работать. Нужно вставить новый токен в приложение Bitrix24.');
+  if(!ok)return;
+  const r=await api('/auth/regen-token','POST');
+  if(r.success){me.api_token=r.token;renderToken();toast('Новый токен создан!','ok');}
+  else toast('Ошибка','err');
+}
+
+// SETTINGS
+function loadSettings(){
+  if(!me)return;
+  G('sName').value=me.name||'';
+  G('sEmail').value=me.email||'';
+}
+async function saveName(){
+  const name=g('sName');if(!name)return toast('Введите имя','err');
+  const r=await api('/auth/profile','PATCH',{name});
+  if(r.success){me=r.user;setSbUser();toast('Сохранено','ok');}
+  else toast(r.errors?.name||'Ошибка','err');
+}
+async function savePass(){
+  const cur=G('curPass').value,next=G('newPass').value;
+  if(!cur||!next)return toast('Заполните оба поля','err');
+  const r=await api('/auth/profile','PATCH',{current_password:cur,new_password:next});
+  if(r.success){G('curPass').value='';G('newPass').value='';toast('Пароль изменён','ok');}
+  else toast(r.errors?.current_password||r.errors?.new_password||'Ошибка','err');
+}
+
+// NAV
+function nav(page,btn){
+  document.querySelectorAll('.sb-item').forEach(b=>b.classList.remove('on'));
+  document.querySelectorAll('.page').forEach(p=>p.classList.remove('on'));
+  btn?.classList.add('on');G('p'+page)?.classList.add('on');
+  if(page==='Settings')loadSettings();
+}
+function stab(id,btn){
+  const pg=btn.closest('.page');
+  pg.querySelectorAll('.tab').forEach(b=>b.classList.remove('on'));
+  pg.querySelectorAll('.tp').forEach(p=>p.classList.remove('on'));
+  btn.classList.add('on');G(id)?.classList.add('on');
+}
+
+// HELPERS
+function setSbUser(){
+  if(!me)return;
+  G('sbName').textContent=me.name||me.email;
+  G('sbEmail').textContent=me.email;
+  G('sbAvatar').textContent=(me.name||me.email||'?')[0].toUpperCase();
+}
+function mInfo(t){
+  return({
+    max:         {ico:'🟥',bg:'background:#fff0f0',lbl:'Max',          bc:'bg-max'},
+    telegram_bot:{ico:'🤖',bg:'background:#ebf8ff',lbl:'Telegram Bot', bc:'bg-tgbot'},
+    telegram_user:{ico:'👤',bg:'background:#f0e6ff',lbl:'Telegram User',bc:'bg-tgu'},
+  })[t]||{ico:'💬',bg:'',lbl:t,bc:'bg-amber'};
+}
+async function api(path,method='GET',body=null){
+  const o={method,headers:{'Content-Type':'application/json'}};
+  if(body)o.body=JSON.stringify(body);
+  const r=await fetch(API_URL+'?_path='+encodeURIComponent(path),o);
+  return r.json();
+}
+function goScreen(id){document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));G(id)?.classList.add('active');}
+function openM(id){G(id)?.classList.add('open');}
+function closeM(id){G(id)?.classList.remove('open');}
+function G(id){return document.getElementById(id);}
+function g(id){return G(id)?.value?.trim()||'';}
+function esc(s){return String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+function fe(fid,eid,msg){G(fid)?.classList.add('bad');const e=G(eid);if(e){e.textContent=msg;e.style.display='block';}}
+function clearF(ids){ids.forEach(id=>G(id)?.classList.remove('bad'));document.querySelectorAll('.ferr').forEach(e=>{e.style.display='none';e.textContent='';});}
+function showAlert(id,msg){const e=G(id);if(e){e.textContent=msg;e.style.display='block';}}
+function loading(id,on,label){const b=G(id);if(!b)return;b.disabled=on;b.innerHTML=on?`<span class="spin"></span> ${label}`:label;}
+let _tt;
+function toast(msg,type=''){const el=G('toast');el.textContent=msg;el.className='show '+type;clearTimeout(_tt);_tt=setTimeout(()=>el.className='',2800);}
+function confirm2(title,text){return new Promise(res=>{_cbRes=res;G('cbTitle').textContent=title;G('cbText').textContent=text;G('confirmBox').classList.add('open');});}
+function cbDone(v){G('confirmBox').classList.remove('open');if(_cbRes){_cbRes(v);_cbRes=null;}}
+document.querySelectorAll('.mb').forEach(b=>b.addEventListener('click',e=>{if(e.target===b)b.classList.remove('open');}));
+</script>
+</body>
+</html>

@@ -477,4 +477,25 @@ public function getDomainBySession(string $sessionId): ?string
         
         return $stmt->fetchAll(\PDO::FETCH_ASSOC) ?: [];
     }
+        /**
+     * Получить все домены (для веб-интерфейса управления)
+     */
+    public function getAllDomains(): array
+    {
+        $stmt = $this->pdo->query("
+            SELECT
+                domain,
+                member_id,
+                connector_id,
+                id_openline,
+                api_token_max IS NOT NULL AND api_token_max != '' AS has_max_token,
+                telegram_bot_token IS NOT NULL AND telegram_bot_token != '' AS has_telegram_token,
+                token_expires,
+                last_updated,
+                date_created
+            FROM bitrix_integration_tokens
+            ORDER BY last_updated DESC
+        ");
+        return $stmt->fetchAll(\PDO::FETCH_ASSOC) ?: [];
+    }
 }
