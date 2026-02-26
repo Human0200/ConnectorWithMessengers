@@ -5,7 +5,6 @@ require_once __DIR__ . '/../../vendor/autoload.php';
 
 use danog\MadelineProto\API;
 use BitrixTelegram\Database\Database;
-use BitrixTelegram\Repositories\TokenRepository;
 
 $config = require __DIR__ . '/../../config/config.php';
 
@@ -36,19 +35,32 @@ echo "\n";
 try {
     $database = Database::getInstance($config['database']);
     $pdo = $database->getConnection();
-    $tokenRepository = new TokenRepository($pdo);
-    
+
     echo colorize("✅ Сервисы инициализированы\n", 'green');
 } catch (\Exception $e) {
     echo colorize("❌ Ошибка: " . $e->getMessage() . "\n", 'red');
     exit(1);
 }
 
-// Получаем все домены через запрос
-$domainsQuery = $pdo->query("SELECT DISTINCT domain FROM madelineproto_sessions WHERE status = 'authorized'");
-$domains = $domainsQuery->fetchAll(PDO::FETCH_COLUMN);
+// Получаем все авторизованные сессии (новая архитектура: через profile_id, без domain)
+$stmt = $pdo->query("
+    SELECT
+        ms.profile_id,
+        ms.session_id,
+        ms.session_file,
+        ms.session_name,
+        ms.account_first_name,
+        ms.account_username
+    FROM madelineproto_sessions ms
+    JOIN user_messenger_profiles ump ON ump.id = ms.profile_id
+    WHERE ms.status = 'authorized'
+      AND ump.is_active = 1
+      AND ump.messenger_type = 'telegram_user'
+    ORDER BY ms.id
+");
+$sessions = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-if (empty($domains)) {
+if (empty($sessions)) {
     echo colorize("❌ Нет активных сессий\n", 'red');
     exit(1);
 }
@@ -56,58 +68,59 @@ if (empty($domains)) {
 // Собираем все активные сессии
 $sessionInstances = [];
 
-foreach ($domains as $domain) {
-    $sessions = $tokenRepository->getActiveMadelineProtoSessions($domain);
+foreach ($sessions as $session) {
+    try {
+        $sessionPath = $session['session_file'];
 
-    foreach ($sessions as $session) {
+        // Разрешаем относительный путь
+        if (!str_starts_with($sessionPath, '/')) {
+            $sessionPath = __DIR__ . '/../../storage/sessions/' . basename($sessionPath);
+        }
+
+        if (!file_exists($sessionPath)) {
+            echo colorize("⚠️  Файл сессии не найден: {$session['session_name']}\n", 'yellow');
+            continue;
+        }
+
+        echo colorize("🔄 Загрузка сессии: {$session['session_name']}...\n", 'cyan');
+
         try {
-            $sessionPath = $session['session_file'];
-            
-            if (!file_exists($sessionPath)) {
-                echo colorize("⚠️  Файл сессии не найден: {$session['session_name']}\n", 'yellow');
-                continue;
+            $tempClassName = 'TempHandler_' . md5($sessionPath);
+
+            if (!class_exists($tempClassName)) {
+                eval("
+                    class {$tempClassName} extends \\danog\\MadelineProto\\EventHandler {
+                        public function getReportPeers() { return []; }
+                    }
+                ");
             }
-            
-            echo colorize("🔄 Загрузка сессии: {$session['session_name']}...\n", 'cyan');
-            
-            try {
-                $tempClassName = 'TempHandler_' . md5($sessionPath);
-                
-                if (!class_exists($tempClassName)) {
-                    eval("
-                        class {$tempClassName} extends \\danog\\MadelineProto\\EventHandler {
-                            public function getReportPeers() { return []; }
-                        }
-                    ");
-                }
-                
-                $instance = new API($sessionPath);
-                $instance->start();
-                $instance->stop();
-                
-                echo colorize("✅ Сессия очищена от старого EventHandler\n", 'green');
-                
-            } catch (\Exception $e) {
-                echo colorize("⚠️  Не удалось очистить EventHandler: " . $e->getMessage() . "\n", 'yellow');
-            }
-            
+
             $instance = new API($sessionPath);
             $instance->start();
+            $instance->stop();
 
-            if ($instance) {
-                $sessionInstances[] = [
-                    'instance' => $instance,
-                    'domain' => $domain,
-                    'session_id' => $session['session_id'],
-                    'session_name' => $session['session_name'],
-                    'account_name' => $session['account_first_name'] . ' (@' . ($session['account_username'] ?? 'N/A') . ')',
-                    'last_update_id' => 0
-                ];
-                echo colorize("✅ Сессия загружена: {$session['session_name']}\n", 'green');
-            }
+            echo colorize("✅ Сессия очищена от старого EventHandler\n", 'green');
+
         } catch (\Exception $e) {
-            echo colorize("⚠️  Ошибка сессии {$session['session_name']}: {$e->getMessage()}\n", 'yellow');
+            echo colorize("⚠️  Не удалось очистить EventHandler: " . $e->getMessage() . "\n", 'yellow');
         }
+
+        $instance = new API($sessionPath);
+        $instance->start();
+
+        if ($instance) {
+            $sessionInstances[] = [
+                'instance'       => $instance,
+                'profile_id'     => $session['profile_id'],
+                'session_id'     => $session['session_id'],
+                'session_name'   => $session['session_name'],
+                'account_name'   => ($session['account_first_name'] ?? '') . ' (@' . ($session['account_username'] ?? 'N/A') . ')',
+                'last_update_id' => 0,
+            ];
+            echo colorize("✅ Сессия загружена: {$session['session_name']}\n", 'green');
+        }
+    } catch (\Exception $e) {
+        echo colorize("⚠️  Ошибка сессии {$session['session_name']}: {$e->getMessage()}\n", 'yellow');
     }
 }
 
@@ -132,10 +145,10 @@ function extractChatId($peer)
     if (is_array($peer)) {
         $type = $peer['_'] ?? 'unknown';
         return match ($type) {
-            'peerUser' => 'user_' . ($peer['user_id'] ?? ''),
-            'peerChat' => 'chat_' . ($peer['chat_id'] ?? ''),
+            'peerUser'    => 'user_' . ($peer['user_id'] ?? ''),
+            'peerChat'    => 'chat_' . ($peer['chat_id'] ?? ''),
             'peerChannel' => 'channel_' . ($peer['channel_id'] ?? ''),
-            default => $type
+            default       => $type
         };
     }
     return 'user_' . $peer;
@@ -145,26 +158,16 @@ function extractChatId($peer)
 function getSenderInfo($madelineProto, $from_id)
 {
     try {
-        // Получаем информацию о пользователе
-        $userInfo = $madelineProto->getFullInfo($from_id);
-        
-        // Извлекаем имя
+        $userInfo  = $madelineProto->getFullInfo($from_id);
         $firstName = $userInfo['User']['first_name'] ?? '';
-        $lastName = $userInfo['User']['last_name'] ?? '';
-        $username = $userInfo['User']['username'] ?? '';
-        
-        // Формируем полное имя
-        $fullName = trim($firstName . ' ' . $lastName);
-        
-        // Добавляем username если есть
+        $lastName  = $userInfo['User']['last_name'] ?? '';
+        $username  = $userInfo['User']['username'] ?? '';
+        $fullName  = trim($firstName . ' ' . $lastName);
         if ($username) {
             $fullName .= " (@$username)";
         }
-        
         return $fullName;
-        
     } catch (\Exception $e) {
-        // В случае ошибки возвращаем ID
         return "Пользователь $from_id";
     }
 }
@@ -173,33 +176,33 @@ function getSenderInfo($madelineProto, $from_id)
 function sendToWebhook($sessionData, $message, $senderName = null)
 {
     try {
-        $webhookUrl = 'http://localhost:8912/webhook.php';
+        $webhookUrl = 'http://localhost:8911/public/admin.html#';
 
         $postData = [
+            'profile_id'   => $sessionData['profile_id'],   // вместо domain
+            'session_id'   => $sessionData['session_id'],
             'session_name' => $sessionData['session_name'],
-            'session_id' => $sessionData['session_id'],
-            'domain' => $sessionData['domain'],
             'account_name' => $sessionData['account_name'],
-            'message' => $message, // Весь массив сообщения
-            'sender_name' => $senderName, // Добавляем имя отправителя
-            'timestamp' => time(),
+            'message'      => $message,
+            'sender_name'  => $senderName,
+            'timestamp'    => time(),
         ];
 
         $ch = curl_init($webhookUrl);
         curl_setopt_array($ch, [
-            CURLOPT_POST => true,
-            CURLOPT_POSTFIELDS => json_encode($postData),
+            CURLOPT_POST           => true,
+            CURLOPT_POSTFIELDS     => json_encode($postData),
             CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_HTTPHEADER => [
+            CURLOPT_HTTPHEADER     => [
                 'Content-Type: application/json',
                 'Accept: application/json',
             ],
-            CURLOPT_TIMEOUT => 10,
+            CURLOPT_TIMEOUT        => 10,
             CURLOPT_CONNECTTIMEOUT => 5,
         ]);
 
         $response = curl_exec($ch);
-        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $httpCode  = curl_getinfo($ch, CURLINFO_HTTP_CODE);
         curl_close($ch);
 
         if ($httpCode !== 200) {
@@ -249,33 +252,29 @@ while (true) {
                     }
 
                     if (isset($update['update']) && is_array($update['update'])) {
-                        print_r($update);
                         $innerUpdate = $update['update'];
-                        $updateType = $innerUpdate['_'] ?? 'unknown';
+                        $updateType  = $innerUpdate['_'] ?? 'unknown';
 
                         if ($updateType === 'updateNewMessage' || $updateType === 'updateNewChannelMessage') {
                             if (isset($innerUpdate['message'])) {
-                                $message = $innerUpdate['message'];
-
-                                $chatId = extractChatId($message['peer_id'] ?? null);
-                                $text = $message['message'] ?? '';
+                                $message    = $innerUpdate['message'];
+                                $chatId     = extractChatId($message['peer_id'] ?? null);
+                                $text       = $message['message'] ?? '';
                                 $isOutgoing = !empty($message['out']);
-                                $direction = $isOutgoing ? '→' : '←';
-                                $dirColor = $isOutgoing ? 'blue' : 'magenta';
+                                $direction  = $isOutgoing ? '→' : '←';
+                                $dirColor   = $isOutgoing ? 'blue' : 'magenta';
 
-                                // Получаем имя отправителя
                                 $senderName = null;
                                 if (isset($message['from_id'])) {
                                     $senderName = getSenderInfo($s['instance'], $message['from_id']);
-                                    
-                                    // Выводим имя отправителя в консоль
+
                                     echo colorize(date('[H:i:s]'), 'cyan');
                                     echo " ";
                                     echo colorize("[{$s['session_name']}]", 'yellow');
                                     echo " ";
                                     echo colorize($direction, $dirColor);
                                     echo " ";
-                                    echo colorize("От: $senderName", 'green'); // Добавляем отправителя
+                                    echo colorize("От: $senderName", 'green');
                                     echo " ";
                                     echo colorize("К: $chatId", 'white');
 
@@ -285,7 +284,6 @@ while (true) {
                                     }
                                     echo "\n";
                                 } else {
-                                    // Если нет from_id, выводим без имени
                                     echo colorize(date('[H:i:s]'), 'cyan');
                                     echo " ";
                                     echo colorize("[{$s['session_name']}]", 'yellow');
@@ -301,7 +299,6 @@ while (true) {
                                     echo "\n";
                                 }
 
-                                // Отправляем в webhook весь массив сообщения с именем отправителя
                                 sendToWebhook($s, $message, $senderName);
                             }
                         }

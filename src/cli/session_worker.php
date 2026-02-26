@@ -9,8 +9,9 @@ use danog\MadelineProto\EventHandler\Message;
 
 $sessionPath = $argv[1] ?? '';
 $sessionName = $argv[2] ?? 'unknown';
-$sessionId   = $argv[3] ?? 0;
-$accountName = $argv[4] ?? '';
+$profileId   = (int)($argv[3] ?? 0);   // было: $sessionId (int)
+$sessionId   = $argv[4] ?? '';          // новый аргумент
+$accountName = $argv[5] ?? '';          // было: $argv[4]
 
 if (empty($sessionPath) || !file_exists($sessionPath)) {
     fwrite(STDERR, "❌ Сессия не найдена\n");
@@ -18,6 +19,8 @@ if (empty($sessionPath) || !file_exists($sessionPath)) {
 }
 
 $GLOBALS['sessionName'] = $sessionName;
+$GLOBALS['profileId']   = $profileId;
+$GLOBALS['sessionId']   = $sessionId;
 $GLOBALS['accountName'] = $accountName;
 
 function colorize($text, $color = 'white') {
@@ -71,10 +74,10 @@ class TelegramEventHandler extends EventHandler
         if (is_array($peerId)) {
             $type = $peerId['_'] ?? 'unknown';
             return match ($type) {
-                'peerUser' => 'user_' . ($peerId['user_id'] ?? ''),
-                'peerChat' => 'chat_' . ($peerId['chat_id'] ?? ''),
+                'peerUser'    => 'user_' . ($peerId['user_id'] ?? ''),
+                'peerChat'    => 'chat_' . ($peerId['chat_id'] ?? ''),
                 'peerChannel' => 'channel_' . ($peerId['channel_id'] ?? ''),
-                default => $type
+                default       => $type
             };
         }
         return is_numeric($peerId) ? 'user_' . $peerId : (string)$peerId;
@@ -85,18 +88,21 @@ class TelegramEventHandler extends EventHandler
         try {
             $webhookUrl = 'http://localhost:8912/webhook.php';
             $postData = [
+                'profile_id'   => $GLOBALS['profileId'],   // вместо domain
+                'session_id'   => $GLOBALS['sessionId'],
                 'session_name' => $GLOBALS['sessionName'],
-                'message' => $messageData,
-                'timestamp' => time(),
+                'account_name' => $GLOBALS['accountName'],
+                'message'      => $messageData,
+                'timestamp'    => time(),
             ];
 
             $ch = curl_init($webhookUrl);
             curl_setopt_array($ch, [
-                CURLOPT_POST => true,
-                CURLOPT_POSTFIELDS => json_encode($postData, JSON_UNESCAPED_UNICODE),
+                CURLOPT_POST           => true,
+                CURLOPT_POSTFIELDS     => json_encode($postData, JSON_UNESCAPED_UNICODE),
                 CURLOPT_RETURNTRANSFER => true,
-                CURLOPT_HTTPHEADER => ['Content-Type: application/json'],
-                CURLOPT_TIMEOUT => 10,
+                CURLOPT_HTTPHEADER     => ['Content-Type: application/json'],
+                CURLOPT_TIMEOUT        => 10,
                 CURLOPT_CONNECTTIMEOUT => 5,
                 CURLOPT_SSL_VERIFYPEER => false,
             ]);
@@ -107,7 +113,7 @@ class TelegramEventHandler extends EventHandler
 }
 
 try {
-    log_msg("🚀 Запуск сессии ID: {$sessionId}", 'green');
+    log_msg("🚀 Запуск сессии profile_id={$profileId} session_id={$sessionId}", 'green');
     $api = new API($sessionPath);
     $api->start();
     $api->setEventHandler(TelegramEventHandler::class);

@@ -34,11 +34,17 @@ class ProfileRepository
             if ($messengerType === 'telegram_user') {
                 $sessionId   = 'tg_' . bin2hex(random_bytes(12));
                 $sessionFile = $sessionId . '.madeline';
+
                 $this->pdo->prepare("
                     INSERT INTO madelineproto_sessions
                         (user_id, profile_id, domain, session_id, session_file, session_name, status)
                     VALUES (?, ?, '', ?, ?, ?, 'pending')
                 ")->execute([$userId, $profileId, $sessionId, $sessionFile, trim($name)]);
+
+                // Сохраняем session_id в extra профиля для быстрого доступа без JOIN
+                $this->pdo->prepare("
+                    UPDATE user_messenger_profiles SET extra = ? WHERE id = ?
+                ")->execute([json_encode(['session_id' => $sessionId]), $profileId]);
             }
 
             $this->pdo->commit();
