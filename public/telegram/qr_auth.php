@@ -1,852 +1,501 @@
 <?php
-// qr_auth.php - QR авторизация для MadelineProto
+// qr_auth.php — QR авторизация для Telegram User профилей
+// URL: /public/telegram/qr_auth.php?session_id=tg_xxxx
 declare(strict_types=1);
 
 require_once __DIR__ . '/../../vendor/autoload.php';
 
 use BitrixTelegram\Database\Database;
 use BitrixTelegram\Repositories\TokenRepository;
+use BitrixTelegram\Repositories\ProfileRepository;
 use BitrixTelegram\Helpers\Logger;
 use BitrixTelegram\Services\MadelineProtoService;
 
-
 $config = require __DIR__ . '/../../config/config.php';
+$pdo    = Database::getInstance($config['database'])->getConnection();
 
-// Инициализация
-$database = Database::getInstance($config['database']);
-$pdo = $database->getConnection();
-$tokenRepository = new TokenRepository($pdo);
-$logger = new Logger($config['logging']);
+$profileRepo = new ProfileRepository($pdo);
+$tokenRepo   = new TokenRepository($pdo);
+$logger      = new Logger($config['logging']);
 
+// Конструктор принимает TokenRepository (обратная совместимость)
+// ProfileRepository передаём через setter
 $madelineService = new MadelineProtoService(
-    $tokenRepository,
+    $tokenRepo,
     $logger,
     $config['telegram']['api_id'],
     $config['telegram']['api_hash'],
     $config['sessions']['path'] ?? null
 );
+$madelineService->setProfileRepository($profileRepo);
 
-// AJAX обработчики - ПЕРЕД любой HTML-выдачей
+// ── AJAX (POST) ──────────────────────────────────────────────
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    // Включаем вывод ошибок для отладки
-    error_reporting(E_ALL);
-    ini_set('display_errors', '1');
-    
     header('Content-Type: application/json');
-    
+
+    $action    = $_POST['action']     ?? '';
+    $sessionId = trim($_POST['session_id'] ?? '');
+
     try {
-        $action = $_POST['action'] ?? '';
-        
-        // Получаем параметры из POST для AJAX
-        $sessionId = $_POST['session_id'] ?? ($_GET['session_id'] ?? '');
-        $domain = $_POST['domain'] ?? ($_GET['domain'] ?? '');
-        
-        $logger->info('AJAX request received', [
-            'action' => $action,
-            'session_id' => $sessionId,
-            'domain' => $domain
-        ]);
-        
-        if (empty($sessionId) || empty($domain)) {
-            throw new \Exception('Не указаны обязательные параметры');
+        if (empty($sessionId)) {
+            throw new \Exception('session_id не указан');
         }
-        
-        // Получаем информацию о сессии
-        $sessionInfo = $tokenRepository->getMadelineProtoSession($domain, $sessionId);
-        
+
+        $sessionInfo = $profileRepo->getSessionBySessionId($sessionId);
         if (!$sessionInfo) {
-            throw new \Exception('Сессия не найдена в базе данных');
+            throw new \Exception('Сессия не найдена');
         }
-        
+
+        $profileId = (int) $sessionInfo['profile_id'];
+
         switch ($action) {
+
+            // ── start_auth ───────────────────────────────────
             case 'start_auth':
-                // Создаем или получаем экземпляр MadelineProto
-                $instance = $madelineService->createOrGetInstance($domain, $sessionId);
-                
-                if (!$instance) {
-                    throw new \Exception('Не удалось инициализировать сессию');
-                }
-                
-                // Проверяем, авторизован ли уже
+                $instance = $madelineService->createOrGetInstanceByProfile($profileId, $sessionId);
+
+                // Сначала проверяем — вдруг уже авторизован
                 try {
                     $self = $instance->getSelf();
-                    
                     if ($self && isset($self['id'])) {
-                        // Уже авторизован
-                        $tokenRepository->saveMadelineProtoSession(
-                            $domain,
-                            $sessionId,
-                            $sessionInfo['session_file'],
-                            $sessionInfo['session_name'],
+                        $madelineService->updateProfileSessionStatus(
+                            $sessionId, 'authorized',
                             $self['id'] ?? null,
                             $self['username'] ?? null,
                             $self['first_name'] ?? null,
-                            'authorized'
+                            $self['last_name'] ?? null
                         );
-                        
-                        echo json_encode([
-                            'success' => true,
-                            'authorized' => true,
-                            'user' => $self
-                        ]);
+                        $logger->info('Already authorized', ['user_id' => $self['id']]);
+                        echo json_encode(['success' => true, 'authorized' => true, 'user' => $self]);
                         exit;
                     }
-                } catch (\Exception $e) {
-                    // Не авторизован, продолжаем получение QR-кода
-                    $logger->debug('Not authorized yet, proceeding to QR login', [
-                        'session_id' => $sessionId
-                    ]);
+                } catch (\Throwable $e) {
+                    $logger->debug('getSelf failed (not authorized)', ['error' => $e->getMessage()]);
                 }
-                
-                // Получаем QR-код для авторизации
-                try {
-                    $qrLogin = $instance->qrLogin();
-                    
-                    // qrLogin возвращает объект LoginQrCode, а не массив
-                    $qrLink = null;
-                    if (is_object($qrLogin)) {
-                        // Пробуем получить ссылку из объекта
-                        if (isset($qrLogin->link)) {
-                            $qrLink = $qrLogin->link;
-                        } elseif (method_exists($qrLogin, 'getLink')) {
-                        } else {
-                            // Если это объект с токеном
-                            $token = $qrLogin->token ?? null;
-                            if ($token) {
-                                $qrLink = "tg://login?token=" . base64_encode($token);
-                            }
+
+                // Получаем QR
+                $qrLogin = $instance->qrLogin();
+                $logger->info('qrLogin result', [
+                    'type'     => get_debug_type($qrLogin),
+                    'is_null'  => $qrLogin === null,
+                    'is_fiber' => $qrLogin instanceof \Fiber,
+                    'class'    => is_object($qrLogin) ? get_class($qrLogin) : 'n/a',
+                ]);
+
+                // qrLogin() вернул null — MadelineProto считает сессию авторизованной
+                // Пробуем getSelf ещё раз
+                if ($qrLogin === null) {
+                    try {
+                        $self = $instance->getSelf();
+                        if ($self && isset($self['id'])) {
+                            $madelineService->updateProfileSessionStatus(
+                                $sessionId, 'authorized',
+                                $self['id'] ?? null,
+                                $self['username'] ?? null,
+                                $self['first_name'] ?? null,
+                                $self['last_name'] ?? null
+                            );
+                            $logger->info('Authorized after qrLogin null', ['user_id' => $self['id']]);
+                            echo json_encode(['success' => true, 'authorized' => true, 'user' => $self]);
+                            exit;
                         }
+                    } catch (\Throwable $e) {
+                        $logger->error('getSelf after qrLogin null failed', ['error' => $e->getMessage()]);
                     }
-                    
-                    $logger->info('QR login response', [
-                        'qr_link' => $qrLink,
-                        'type' => is_object($qrLogin) ? get_class($qrLogin) : gettype($qrLogin)
-                    ]);
-                    
-                    echo json_encode([
-                        'success' => true,
-                        'authorized' => false,
-                        'qr_link' => $qrLink
-                    ]);
-                } catch (\Exception $e) {
-                    $logger->error('QR login failed', [
-                        'error' => $e->getMessage()
-                    ]);
-                    throw new \Exception('Не удалось получить QR-код: ' . $e->getMessage());
+
+                    // Файл сессии повреждён или устарел — удаляем и пересоздаём
+                    $logger->warning('qrLogin null and getSelf failed — resetting session file');
+                    $madelineService->resetSessionFile($profileId, $sessionId);
+                    $instance = $madelineService->createOrGetInstanceByProfile($profileId, $sessionId);
+                    $qrLogin  = $instance->qrLogin();
+                    $logger->info('qrLogin after reset', ['type' => get_debug_type($qrLogin)]);
                 }
+
+                $qrLink = extractQrLink($qrLogin, $logger);
+
+                if (!$qrLink) {
+                    throw new \Exception('MadelineProto не вернул QR-ссылку. Тип: ' . get_debug_type($qrLogin));
+                }
+
+                echo json_encode(['success' => true, 'authorized' => false, 'qr_link' => $qrLink]);
                 exit;
-                
+
+            // ── check_auth ───────────────────────────────────
             case 'check_auth':
-                // Проверяем статус авторизации
-                $instance = $madelineService->getInstance($domain, $sessionId);
-                
-                if (!$instance) {
-                    // Пробуем создать новый экземпляр
-                    $instance = $madelineService->createOrGetInstance($domain, $sessionId);
-                    if (!$instance) {
-                        throw new \Exception('Не удалось инициализировать сессию');
-                    }
-                }
-                
+                $instance = $madelineService->createOrGetInstanceByProfile($profileId, $sessionId);
+
                 try {
                     $user = $instance->getSelf();
-                    
-                    if ($user) {
-                        // Авторизация успешна
-                        $tokenRepository->saveMadelineProtoSession(
-                            $domain,
-                            $sessionId,
-                            $sessionInfo['session_file'],
-                            $sessionInfo['session_name'],
+                    if ($user && isset($user['id'])) {
+                        $madelineService->updateProfileSessionStatus(
+                            $sessionId, 'authorized',
                             $user['id'] ?? null,
                             $user['username'] ?? null,
                             $user['first_name'] ?? null,
-                            'authorized'
+                            $user['last_name'] ?? null
                         );
-                        
-                        $logger->info('Session authorized successfully', [
-                            'domain' => $domain,
+
+                        $logger->info('Telegram User authorized via QR', [
                             'session_id' => $sessionId,
-                            'user_id' => $user['id'] ?? null
+                            'profile_id' => $profileId,
+                            'user_id'    => $user['id'],
                         ]);
-                        
+
                         echo json_encode([
-                            'success' => true,
+                            'success'    => true,
                             'authorized' => true,
-                            'user' => [
-                                'id' => $user['id'] ?? null,
-                                'username' => $user['username'] ?? null,
+                            'user'       => [
+                                'id'         => $user['id'] ?? null,
+                                'username'   => $user['username'] ?? null,
                                 'first_name' => $user['first_name'] ?? null,
-                                'last_name' => $user['last_name'] ?? null,
-                            ]
+                                'last_name'  => $user['last_name'] ?? null,
+                            ],
                         ]);
                         exit;
                     }
                 } catch (\Exception $e) {
-                    // Еще не авторизован
-                    $logger->debug('Not authorized yet', [
+                    // Ещё не авторизован
+                    $logger->debug('check_auth: not yet authorized', [
                         'session_id' => $sessionId,
-                        'error' => $e->getMessage()
+                        'error'      => $e->getMessage(),
                     ]);
                 }
-                
-                echo json_encode([
-                    'success' => true,
-                    'authorized' => false
-                ]);
+
+                echo json_encode(['success' => true, 'authorized' => false]);
                 exit;
-                
+
+            // ── refresh_qr ───────────────────────────────────
             case 'refresh_qr':
-                // Обновляем QR-код
-                $instance = $madelineService->createOrGetInstance($domain, $sessionId);
-                
-                if (!$instance) {
-                    throw new \Exception('Не удалось инициализировать сессию');
+                $instance = $madelineService->createOrGetInstanceByProfile($profileId, $sessionId);
+                $qrLogin  = $instance->qrLogin();
+                $qrLink   = extractQrLink($qrLogin, $logger);
+
+                if (!$qrLink) {
+                    throw new \Exception('Не удалось получить новый QR-код');
                 }
-                
-                // Сбрасываем текущую сессию QR
-                try {
-                    if (isset($instance->qrLogin)) {
-                        unset($instance->qrLogin);
-                    }
-                } catch (\Exception $e) {
-                    // Игнорируем ошибки сброса
-                }
-                
-                // Получаем новый QR
-                try {
-                    $qrLogin = $instance->qrLogin();
-                    $qrLink = null;
-                    
-                    if (is_object($qrLogin)) {
-                        if (isset($qrLogin->link)) {
-                            $qrLink = $qrLogin->link;
-                        } elseif (method_exists($qrLogin, 'getLink')) {
-                        } else {
-                            $token = $qrLogin->token ?? null;
-                            if ($token) {
-                                $qrLink = "tg://login?token=" . base64_encode($token);
-                            }
-                        }
-                    }
-                    
-                    $logger->info('New QR generated', [
-                        'session_id' => $sessionId,
-                        'qr_link' => $qrLink ? 'generated' : 'null'
-                    ]);
-                    
-                    if (!$qrLink) {
-                        throw new \Exception('Не удалось сгенерировать QR-ссылку');
-                    }
-                    
-                    echo json_encode([
-                        'success' => true,
-                        'qr_link' => $qrLink
-                    ]);
-                    
-                } catch (\Exception $e) {
-                    $logger->error('QR refresh failed', [
-                        'error' => $e->getMessage()
-                    ]);
-                    throw new \Exception('Не удалось обновить QR-код: ' . $e->getMessage());
-                }
+
+                echo json_encode(['success' => true, 'qr_link' => $qrLink]);
                 exit;
-                
+
             default:
-                throw new \Exception('Неизвестное действие: ' . $action);
+                throw new \Exception('Неизвестное действие: ' . htmlspecialchars($action));
         }
-        
+
     } catch (\Throwable $e) {
-        $logger->error('QR Auth error', [
-            'action' => $action ?? 'unknown',
-            'error' => $e->getMessage(),
-            'file' => $e->getFile(),
-            'line' => $e->getLine(),
-            'trace' => $e->getTraceAsString()
+        $logger->error('qr_auth error', [
+            'action'     => $action,
+            'session_id' => $sessionId ?? '?',
+            'error'      => $e->getMessage(),
+            'file'       => basename($e->getFile()),
+            'line'       => $e->getLine(),
         ]);
-        
-        http_response_code(200); // Всегда возвращаем 200, чтобы JSON обработался
-        echo json_encode([
-            'success' => false, 
-            'error' => $e->getMessage(),
-            'debug' => [
-                'file' => basename($e->getFile()),
-                'line' => $e->getLine()
-            ]
-        ]);
+        echo json_encode(['success' => false, 'error' => $e->getMessage()]);
         exit;
     }
 }
 
-// Для GET-запросов (отображение HTML)
-$sessionId = $_GET['session_id'] ?? '';
-$domain = $_GET['domain'] ?? '';
+// ── Вспомогательная функция ──────────────────────────────────
+function extractQrLink(mixed $qrLogin, Logger $logger): ?string
+{
+    if ($qrLogin === null) {
+        $logger->warning('qrLogin returned NULL');
+        return null;
+    }
 
-if (empty($sessionId) || empty($domain)) {
-    die('Ошибка: не указаны обязательные параметры (session_id, domain)');
+    $type = get_debug_type($qrLogin);
+    $logger->info('qrLogin raw result', ['type' => $type]);
+
+    if (is_string($qrLogin)) {
+        $logger->info('qrLogin is string', ['value' => substr($qrLogin, 0, 200)]);
+        return $qrLogin;
+    }
+
+    if (is_array($qrLogin)) {
+        $logger->info('qrLogin is array', ['keys' => array_keys($qrLogin)]);
+        if (isset($qrLogin['link']))  return $qrLogin['link'];
+        if (isset($qrLogin['token'])) return 'tg://login?token=' . base64_encode($qrLogin['token']);
+        // Пробуем сериализовать для диагностики
+        $logger->info('qrLogin array full', ['data' => json_encode($qrLogin)]);
+        return null;
+    }
+
+    if (is_object($qrLogin)) {
+        $props = [];
+        try { $props = (array)$qrLogin; } catch (\Throwable $e) {}
+        $logger->info('qrLogin is object', [
+            'class'   => get_class($qrLogin),
+            'props'   => array_keys($props),
+            'has_link'     => isset($qrLogin->link),
+            'has_token'    => isset($qrLogin->token),
+            'has_getLink'  => method_exists($qrLogin, 'getLink'),
+        ]);
+
+        if (isset($qrLogin->link) && $qrLogin->link)   return $qrLogin->link;
+        if (method_exists($qrLogin, 'getLink'))         return $qrLogin->getLink();
+        if (isset($qrLogin->token) && $qrLogin->token)  return 'tg://login?token=' . base64_encode((string)$qrLogin->token);
+
+        // Ищем по всем публичным свойствам
+        foreach ($props as $k => $v) {
+            $logger->info('qrLogin prop', ['key' => $k, 'type' => gettype($v), 'value' => is_scalar($v) ? substr((string)$v, 0, 100) : gettype($v)]);
+        }
+
+        return null;
+    }
+
+    $logger->warning('qrLogin unknown type', ['type' => $type]);
+    return null;
 }
 
-// Получаем информацию о сессии для HTML
-$sessionInfo = $tokenRepository->getMadelineProtoSession($domain, $sessionId);
+// ── GET (HTML страница) ──────────────────────────────────────
+$sessionId = trim($_GET['session_id'] ?? '');
+if (empty($sessionId)) {
+    http_response_code(400);
+    die('Ошибка: не указан session_id');
+}
 
+$sessionInfo = $profileRepo->getSessionBySessionId($sessionId);
 if (!$sessionInfo) {
-    die('Ошибка: сессия не найдена');
+    http_response_code(404);
+    die('Ошибка: сессия не найдена. Возможно профиль был удалён.');
 }
+
+$profileName = htmlspecialchars($sessionInfo['session_name'] ?? $sessionInfo['profile_name'] ?? 'Telegram User');
 ?>
 <!DOCTYPE html>
 <html lang="ru">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>QR Авторизация - <?= htmlspecialchars($sessionInfo['session_name']) ?></title>
-    <script src="https://api.bitrix24.com/api/v1/"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
-    <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-        
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
-            padding: 20px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-        }
-        
-        .container {
-            max-width: 600px;
-            width: 100%;
-        }
-        
-        .card {
-            background: white;
-            border-radius: 20px;
-            padding: 40px;
-            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
-            text-align: center;
-        }
-        
-        .header {
-            margin-bottom: 30px;
-        }
-        
-        .header h1 {
-            color: #333;
-            font-size: 2rem;
-            margin-bottom: 10px;
-        }
-        
-        .header p {
-            color: #666;
-            font-size: 1rem;
-        }
-        
-        .session-info {
-            background: #f8f9fa;
-            padding: 20px;
-            border-radius: 12px;
-            margin-bottom: 30px;
-        }
-        
-        .session-info h3 {
-            color: #667eea;
-            margin-bottom: 15px;
-            font-size: 1.3rem;
-        }
-        
-        .info-item {
-            display: flex;
-            justify-content: space-between;
-            padding: 8px 0;
-            border-bottom: 1px solid #e0e0e0;
-        }
-        
-        .info-item:last-child {
-            border-bottom: none;
-        }
-        
-        .info-label {
-            font-weight: 600;
-            color: #555;
-        }
-        
-        .info-value {
-            color: #888;
-        }
-        
-        .qr-container {
-            display: none;
-            margin: 30px 0;
-        }
-        
-        .qr-container.active {
-            display: block;
-        }
-        
-        #qrcode {
-            display: inline-block;
-            padding: 20px;
-            background: white;
-            border-radius: 12px;
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
-        }
-        
-        .instructions {
-            margin-top: 20px;
-            padding: 20px;
-            background: #e3f2fd;
-            border-radius: 12px;
-            color: #1976d2;
-        }
-        
-        .instructions h4 {
-            margin-bottom: 10px;
-            font-size: 1.1rem;
-        }
-        
-        .instructions ol {
-            text-align: left;
-            padding-left: 20px;
-        }
-        
-        .instructions li {
-            margin: 8px 0;
-        }
-        
-        .success-container {
-            display: none;
-            margin: 30px 0;
-        }
-        
-        .success-container.active {
-            display: block;
-        }
-        
-        .success-icon {
-            width: 100px;
-            height: 100px;
-            margin: 0 auto 20px;
-            background: #4caf50;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: white;
-            font-size: 50px;
-        }
-        
-        .user-info {
-            background: #f8f9fa;
-            padding: 20px;
-            border-radius: 12px;
-            margin-top: 20px;
-        }
-        
-        .user-info h3 {
-            color: #4caf50;
-            margin-bottom: 15px;
-        }
-        
-        .btn {
-            padding: 12px 30px;
-            border: none;
-            border-radius: 8px;
-            font-size: 1rem;
-            font-weight: 600;
-            cursor: pointer;
-            transition: all 0.3s;
-            text-decoration: none;
-            display: inline-block;
-            margin: 10px 5px;
-        }
-        
-        .btn-primary {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-        }
-        
-        .btn-primary:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
-        }
-        
-        .btn-success {
-            background: #4caf50;
-            color: white;
-        }
-        
-        .btn-success:hover {
-            background: #45a049;
-        }
-        
-        .loading {
-            margin: 30px 0;
-        }
-        
-        .spinner {
-            border: 4px solid #f3f3f3;
-            border-top: 4px solid #667eea;
-            border-radius: 50%;
-            width: 50px;
-            height: 50px;
-            animation: spin 1s linear infinite;
-            margin: 0 auto 20px;
-        }
-        
-        @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-        }
-        
-        .status-message {
-            padding: 15px 20px;
-            border-radius: 8px;
-            margin: 20px 0;
-            font-weight: 500;
-        }
-        
-        .status-info {
-            background: #e3f2fd;
-            color: #1976d2;
-        }
-        
-        .status-error {
-            background: #ffebee;
-            color: #c62828;
-        }
-        
-        .timer {
-            font-size: 0.9rem;
-            color: #888;
-            margin-top: 10px;
-        }
-        
-        .qr-timer {
-            font-size: 0.9rem;
-            color: #ff9800;
-            font-weight: 600;
-            margin-top: 10px;
-            padding: 8px 15px;
-            background: #fff3e0;
-            border-radius: 20px;
-            display: block;
-        }
-        
-        .qr-expired {
-            animation: pulse 1s infinite;
-        }
-        
-        @keyframes pulse {
-            0% { opacity: 1; }
-            50% { opacity: 0.5; }
-            100% { opacity: 1; }
-        }
-    </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Telegram авторизация — <?= $profileName ?></title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<style>
+*,::before,::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#f5f4f0;--white:#fff;--ink:#18181b;--ink2:#3f3f46;--muted:#71717a;
+  --border:#e4e4e7;--accent:#2563eb;
+  --green:#16a34a;--green-l:#f0fdf4;
+  --red:#dc2626;--red-l:#fef2f2;
+  --amber:#d97706;--amber-l:#fffbeb;
+}
+html{font-family:'DM Sans',system-ui,sans-serif;background:var(--bg);color:var(--ink);-webkit-font-smoothing:antialiased}
+body{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px}
+
+.wrap{width:440px;max-width:100%}
+.card{background:var(--white);border:1px solid var(--border);border-radius:16px;padding:32px;box-shadow:0 4px 6px rgba(0,0,0,.07),0 20px 48px rgba(0,0,0,.1)}
+
+.head{text-align:center;margin-bottom:24px}
+.head-icon{font-size:40px;margin-bottom:10px}
+.head h1{font-size:22px;font-weight:600;margin-bottom:4px}
+.head p{font-size:13px;color:var(--muted)}
+
+.info-row{display:flex;justify-content:space-between;align-items:center;padding:9px 12px;background:var(--bg);border-radius:8px;margin-bottom:6px;font-size:13px}
+.info-row .lbl{color:var(--muted);font-size:12px}
+.info-row .val{font-weight:500}
+
+.divider{height:1px;background:var(--border);margin:20px 0}
+
+.state{display:none;text-align:center}
+.state.on{display:block}
+
+.spinner{width:44px;height:44px;border:3px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin .7s linear infinite;margin:20px auto}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+#qrcode{display:inline-block;padding:16px;background:#fff;border-radius:10px;border:1px solid var(--border);box-shadow:0 2px 8px rgba(0,0,0,.06);margin:4px 0 16px}
+
+.steps{background:var(--bg);border-radius:10px;padding:16px;text-align:left;font-size:13px;line-height:1.7;color:var(--ink2)}
+.steps ol{padding-left:18px}
+.steps li{margin:3px 0}
+.steps strong{color:var(--ink)}
+
+.timer-btn{display:inline-flex;align-items:center;gap:6px;background:var(--amber-l);color:var(--amber);border-radius:20px;padding:5px 14px;font-size:12px;font-weight:500;margin:10px 0 16px;cursor:pointer;border:none;font-family:inherit;transition:opacity .2s}
+.timer-btn.urgent{animation:pulse 1s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
+
+.success-icon{width:72px;height:72px;background:var(--green);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:32px;color:#fff;margin:0 auto 16px;animation:pop .35s ease}
+@keyframes pop{0%{transform:scale(.5)}70%{transform:scale(1.1)}100%{transform:scale(1)}}
+.user-card{background:var(--green-l);border:1px solid rgba(22,163,74,.2);border-radius:10px;padding:16px;margin:16px 0;text-align:left}
+.user-card .uname{font-weight:600;font-size:15px;margin-bottom:3px}
+.user-card .umeta{font-size:12px;color:var(--muted)}
+
+.error-box{background:var(--red-l);border:1px solid rgba(220,38,38,.2);border-radius:10px;padding:14px;font-size:13px;color:var(--red);margin-top:14px;text-align:left;line-height:1.5}
+
+.btn{display:inline-flex;align-items:center;gap:6px;padding:9px 18px;border-radius:8px;font-size:13px;font-weight:500;border:none;cursor:pointer;transition:all .13s;font-family:inherit;text-decoration:none}
+.btn-primary{background:var(--ink);color:#fff}
+.btn-primary:hover{background:#27272a}
+.btn-ghost{background:transparent;border:1.5px solid var(--border);color:var(--ink2)}
+.btn-ghost:hover{background:var(--bg)}
+
+.check-hint{font-size:11px;color:var(--muted);margin-top:10px}
+</style>
 </head>
 <body>
-    <div class="container">
-        <div class="card">
-            <div class="header">
-                <h1>🔐 QR Авторизация</h1>
-                <p>Telegram MadelineProto</p>
-            </div>
-            
-            <div class="session-info">
-                <h3>Информация о сессии</h3>
-                <div class="info-item">
-                    <span class="info-label">Название:</span>
-                    <span class="info-value"><?= htmlspecialchars($sessionInfo['session_name']) ?></span>
-                </div>
-                <div class="info-item">
-                    <span class="info-label">Домен:</span>
-                    <span class="info-value"><?= htmlspecialchars($domain) ?></span>
-                </div>
-                <div class="info-item">
-                    <span class="info-label">Session ID:</span>
-                    <span class="info-value"><?= htmlspecialchars($sessionId) ?></span>
-                </div>
-            </div>
-            
-            <!-- Загрузка -->
-            <div id="loadingContainer" class="loading">
-                <div class="spinner"></div>
-                <p>Инициализация...</p>
-            </div>
-            
-            <!-- QR-код -->
-            <div id="qrContainer" class="qr-container">
-                <div id="qrcode"></div>
-                <div class="qr-timer" id="qrTimer">
-                    QR обновится через: <span id="qrCountdown">15</span>с
-                </div>
-                <div class="instructions">
-                    <h4>📱 Как авторизоваться:</h4>
-                    <ol>
-                        <li>Откройте Telegram на телефоне</li>
-                        <li>Перейдите в Настройки → Устройства → Подключить устройство</li>
-                        <li>Отсканируйте QR-код выше</li>
-                        <li>Дождитесь подтверждения авторизации</li>
-                    </ol>
-                </div>
-                <div class="timer" id="timer">
-                    Проверка авторизации: <span id="countdown">0</span>с
-                </div>
-            </div>
-            
-            <!-- Успешная авторизация -->
-            <div id="successContainer" class="success-container">
-                <div class="success-icon">✓</div>
-                <h2 style="color: #4caf50; margin-bottom: 15px;">Авторизация успешна!</h2>
-                <p style="color: #666; margin-bottom: 20px;">Ваша сессия активирована</p>
-                
-                <div id="userInfo" class="user-info"></div>
-            </div>
-            
-            <!-- Сообщения об ошибках -->
-            <div id="statusMessage"></div>
-        </div>
+<div class="wrap">
+  <div class="card">
+
+    <div class="head">
+      <div class="head-icon">👤</div>
+      <h1>Telegram авторизация</h1>
+      <p>Отсканируйте QR-код в приложении Telegram</p>
     </div>
 
-    <script>
-        // Параметры из PHP
-        const SESSION_ID = '<?= htmlspecialchars($sessionId) ?>';
-        const DOMAIN = '<?= htmlspecialchars($domain) ?>';
-        const QR_REFRESH_INTERVAL = 15000; // 15 секунд
-        
-        let checkInterval = null;
-        let countdownTimer = null;
-        let qrRefreshTimer = null;
-        let secondsElapsed = 0;
-        let qrRefreshSeconds = 0;
-        let qrCodeInstance = null;
-        
-        const loadingContainer = document.getElementById('loadingContainer');
-        const qrContainer = document.getElementById('qrContainer');
-        const successContainer = document.getElementById('successContainer');
-        const userInfoDiv = document.getElementById('userInfo');
-        const statusMessage = document.getElementById('statusMessage');
-        const countdownSpan = document.getElementById('countdown');
-        const qrCountdownSpan = document.getElementById('qrCountdown');
-        const qrTimer = document.getElementById('qrTimer');
-        
-        // Показать сообщение
-        function showMessage(message, type = 'info') {
-            statusMessage.innerHTML = `<div class="status-message status-${type}">${message}</div>`;
-        }
-        
-        // Запуск авторизации
-        async function startAuth() {
-            try {
-                const formData = new FormData();
-                formData.append('action', 'start_auth');
-                formData.append('session_id', SESSION_ID);
-                formData.append('domain', DOMAIN);
-                
-                const response = await fetch('', {
-                    method: 'POST',
-                    body: formData
-                });
-                
-                const text = await response.text();
-                console.log('===== SERVER RESPONSE =====');
-                console.log(text);
-                console.log('===========================');
-                
-                const data = JSON.parse(text);
-                
-                if (!data.success) {
-                    throw new Error(data.error || 'Ошибка запуска авторизации');
-                }
-                
-                loadingContainer.style.display = 'none';
-                
-                if (data.authorized) {
-                    showSuccess(data.user);
-                } else {
-                    if (!data.qr_link) {
-                        throw new Error('QR-ссылка не получена от сервера');
-                    }
-                    showQRCode(data.qr_link);
-                    startChecking();
-                }
-                
-            } catch (error) {
-                loadingContainer.style.display = 'none';
-                showMessage('Ошибка: ' + error.message, 'error');
-                console.error('Full error:', error);
-            }
-        }
-        
-        // Показать QR-код
-        function showQRCode(link) {
-            qrContainer.classList.add('active');
-            
-            // Очищаем предыдущий QR-код
-            document.getElementById('qrcode').innerHTML = '';
-            
-            // Сбрасываем таймер QR
-            qrRefreshSeconds = 0;
-            qrCountdownSpan.textContent = Math.floor(QR_REFRESH_INTERVAL / 1000);
-            qrTimer.classList.remove('qr-expired');
-            
-            // Генерируем новый QR-код
-            qrCodeInstance = new QRCode(document.getElementById('qrcode'), {
-                text: link,
-                width: 256,
-                height: 256,
-                colorDark: '#000000',
-                colorLight: '#ffffff',
-                correctLevel: QRCode.CorrectLevel.H
-            });
-        }
-        
-        // Функция обновления QR-кода
-        async function refreshQRCode() {
-            try {
-                console.log('Обновление QR-кода...');
-                
-                const formData = new FormData();
-                formData.append('action', 'refresh_qr');
-                formData.append('session_id', SESSION_ID);
-                formData.append('domain', DOMAIN);
-                
-                const response = await fetch('', {
-                    method: 'POST',
-                    body: formData
-                });
-                
-                const data = await response.json();
-                
-                if (data.success && data.qr_link) {
-                    showQRCode(data.qr_link);
-                    showMessage('QR-код обновлен', 'info');
-                } else {
-                    console.warn('Не удалось обновить QR-код:', data.error);
-                    showMessage('Не удалось обновить QR-код', 'error');
-                }
-                
-            } catch (error) {
-                console.error('Ошибка обновления QR:', error);
-                showMessage('Ошибка обновления QR-кода', 'error');
-            }
-        }
-        
-        // Проверка статуса авторизации
-        async function checkAuth() {
-            try {
-                const formData = new FormData();
-                formData.append('action', 'check_auth');
-                formData.append('session_id', SESSION_ID);
-                formData.append('domain', DOMAIN);
-                
-                const response = await fetch('', {
-                    method: 'POST',
-                    body: formData
-                });
-                
-                const data = await response.json();
-                console.log('Check auth response:', data);
-                if (data.success && data.authorized) {
-                    stopChecking();
-                    showSuccess(data.user);
-                }
-                
-            } catch (error) {
-                console.error('Ошибка проверки авторизации:', error);
-            }
-        }
-        
-        // Запуск периодической проверки
-        function startChecking() {
-            secondsElapsed = 0;
-            qrRefreshSeconds = 0;
-            
-            // Проверяем авторизацию каждые 3 секунды
-            checkInterval = setInterval(checkAuth, 3000);
-            
-            // Обновляем QR-код каждые 15 секунд
-            qrRefreshTimer = setInterval(refreshQRCode, QR_REFRESH_INTERVAL);
-            
-            // Таймеры обратного отсчета
-            countdownTimer = setInterval(() => {
-                secondsElapsed++;
-                qrRefreshSeconds++;
-                
-                countdownSpan.textContent = secondsElapsed;
-                
-                // Обновляем таймер QR
-                const remainingSeconds = Math.max(0, Math.floor(QR_REFRESH_INTERVAL / 1000) - qrRefreshSeconds);
-                qrCountdownSpan.textContent = remainingSeconds;
-                
-                // Подсвечиваем когда осталось мало времени
-                if (remainingSeconds <= 5) {
-                    qrTimer.classList.add('qr-expired');
-                } else {
-                    qrTimer.classList.remove('qr-expired');
-                }
-                
-            }, 1000);
-        }
-        
-        // Остановка проверки
-        function stopChecking() {
-            if (checkInterval) {
-                clearInterval(checkInterval);
-                checkInterval = null;
-            }
-            if (countdownTimer) {
-                clearInterval(countdownTimer);
-                countdownTimer = null;
-            }
-            if (qrRefreshTimer) {
-                clearInterval(qrRefreshTimer);
-                qrRefreshTimer = null;
-            }
-        }
-        
-        // Показать успешную авторизацию
-        function showSuccess(user) {
-            qrContainer.classList.remove('active');
-            successContainer.classList.add('active');
-            
-            userInfoDiv.innerHTML = `
-                <h3>Информация об аккаунте</h3>
-                <div class="info-item">
-                    <span class="info-label">ID:</span>
-                    <span class="info-value">${user.id || 'N/A'}</span>
-                </div>
-                <div class="info-item">
-                    <span class="info-label">Имя:</span>
-                    <span class="info-value">${user.first_name || ''} ${user.last_name || ''}</span>
-                </div>
-                ${user.username ? `
-                    <div class="info-item">
-                        <span class="info-label">Username:</span>
-                        <span class="info-value">@${user.username}</span>
-                    </div>
-                ` : ''}
-            `;
-        }
-        
-        // Запуск при загрузке страницы
-        document.addEventListener('DOMContentLoaded', () => {
-            startAuth();
-        });
-        
-        // Очистка при закрытии страницы
-        window.addEventListener('beforeunload', () => {
-            stopChecking();
-        });
-        
-        // Автоматическое обновление QR по клику на таймер
-        qrTimer.addEventListener('click', () => {
-            refreshQRCode();
-        });
-    </script>
+    <div class="info-row">
+      <span class="lbl">Профиль</span>
+      <span class="val"><?= $profileName ?></span>
+    </div>
+    <div class="info-row">
+      <span class="lbl">Session ID</span>
+      <span class="val" style="font-family:monospace;font-size:11px"><?= htmlspecialchars($sessionId) ?></span>
+    </div>
+
+    <div class="divider"></div>
+
+    <!-- Загрузка -->
+    <div class="state on" id="stLoading">
+      <div class="spinner"></div>
+      <p style="color:var(--muted);font-size:13px">Инициализация MadelineProto...</p>
+    </div>
+
+    <!-- QR -->
+    <div class="state" id="stQR">
+      <div id="qrcode"></div>
+      <button class="timer-btn" id="timerBtn" onclick="refreshQR()">
+        ↻ Обновить QR &nbsp;·&nbsp; <span id="qrCd">15</span>с
+      </button>
+      <div class="steps">
+        <ol>
+          <li>Откройте <strong>Telegram</strong> на телефоне</li>
+          <li>Перейдите <strong>Настройки → Устройства → Подключить устройство</strong></li>
+          <li>Отсканируйте QR-код</li>
+          <li>Подтвердите вход на телефоне</li>
+        </ol>
+      </div>
+      <p class="check-hint">Проверка каждые 3с · прошло: <span id="elapsed">0</span>с</p>
+    </div>
+
+    <!-- Успех -->
+    <div class="state" id="stSuccess">
+      <div class="success-icon">✓</div>
+      <h2 style="font-size:20px;margin-bottom:6px">Авторизация успешна!</h2>
+      <p style="font-size:13px;color:var(--muted)">Сессия активирована. Можете закрыть эту вкладку.</p>
+      <div class="user-card" id="userCard"></div>
+      <button class="btn btn-ghost" style="margin-top:4px" onclick="window.close()">Закрыть вкладку</button>
+    </div>
+
+    <!-- Ошибка -->
+    <div class="state" id="stError">
+      <p style="font-size:32px;margin-bottom:8px">⚠️</p>
+      <h2 style="font-size:18px;margin-bottom:6px">Ошибка</h2>
+      <div class="error-box" id="errMsg"></div>
+      <div style="margin-top:16px;display:flex;gap:8px;justify-content:center">
+        <button class="btn btn-primary" onclick="start()">Попробовать снова</button>
+        <button class="btn btn-ghost" onclick="window.close()">Закрыть</button>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+const SID           = '<?= htmlspecialchars($sessionId) ?>';
+const QR_REFRESH_MS = 15000;
+const CHECK_MS      = 3000;
+
+let checkT, qrT, cdT, elapsed = 0, qrElapsed = 0;
+
+function show(id){
+  document.querySelectorAll('.state').forEach(s => s.classList.remove('on'));
+  document.getElementById(id)?.classList.add('on');
+}
+
+async function post(action){
+  const fd = new FormData();
+  fd.append('action', action);
+  fd.append('session_id', SID);
+  const r = await fetch(window.location.pathname + window.location.search, {method:'POST', body:fd});
+  return r.json();
+}
+
+async function start(){
+  show('stLoading');
+  stop();
+  try {
+    const d = await post('start_auth');
+    if (!d.success) throw new Error(d.error || 'Ошибка инициализации');
+    if (d.authorized) { showSuccess(d.user); return; }
+    if (!d.qr_link)   throw new Error('QR-ссылка не получена от сервера');
+    drawQR(d.qr_link);
+    startTimers();
+  } catch(e){ showError(e.message); }
+}
+
+function drawQR(link){
+  show('stQR');
+  const el = document.getElementById('qrcode');
+  el.innerHTML = '';
+  new QRCode(el, {text:link, width:220, height:220, colorDark:'#18181b', colorLight:'#ffffff', correctLevel:QRCode.CorrectLevel.H});
+  qrElapsed = 0;
+  document.getElementById('qrCd').textContent = Math.round(QR_REFRESH_MS/1000);
+  document.getElementById('timerBtn').classList.remove('urgent');
+}
+
+function showSuccess(user){
+  stop();
+  show('stSuccess');
+  const name = [user.first_name, user.last_name].filter(Boolean).join(' ') || '—';
+  document.getElementById('userCard').innerHTML =
+    `<div class="uname">${esc(name)}</div>` +
+    (user.username ? `<div class="umeta">@${esc(user.username)}</div>` : '') +
+    (user.id       ? `<div class="umeta">ID: ${user.id}</div>` : '');
+}
+
+function showError(msg){
+  stop();
+  show('stError');
+  document.getElementById('errMsg').textContent = msg;
+}
+
+async function checkAuth(){
+console.log('Checking auth...');
+  try {
+    const d = await post('check_auth');
+    console.log('check_auth response', d);
+    if (d.success && d.authorized) showSuccess(d.user);
+  } catch(e){
+    console.log('check_auth error', e);
+  }
+}
+
+async function refreshQR(){
+  try {
+    const d = await post('refresh_qr');
+    if (d.success && d.qr_link) drawQR(d.qr_link);
+  } catch(e){}
+}
+
+function startTimers(){
+  elapsed = qrElapsed = 0;
+  checkT = setInterval(checkAuth, CHECK_MS);
+  qrT    = setInterval(refreshQR, QR_REFRESH_MS);
+  cdT    = setInterval(() => {
+    elapsed++; qrElapsed++;
+    document.getElementById('elapsed').textContent = elapsed;
+    const rem = Math.max(0, Math.round(QR_REFRESH_MS/1000) - qrElapsed);
+    document.getElementById('qrCd').textContent = rem;
+    document.getElementById('timerBtn').classList.toggle('urgent', rem <= 4);
+  }, 1000);
+}
+
+function stop(){
+  [checkT, qrT, cdT].forEach(t => t && clearInterval(t));
+  checkT = qrT = cdT = null;
+}
+
+function esc(s){ return String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+window.addEventListener('beforeunload', stop);
+document.addEventListener('DOMContentLoaded', start);
+</script>
 </body>
 </html>

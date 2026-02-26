@@ -7,9 +7,13 @@ composer.lock
 .env.local
 .env.*.local
 
+
+
 # Logs
 /logs/*.log
 /logs/**/*.log
+src/cli/*.log
+*.log
 
 # IDE
 .idea/

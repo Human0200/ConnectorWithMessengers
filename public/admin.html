@@ -467,6 +467,10 @@ function renderList(){
 
 function profileCard(p){
   const m=mInfo(p.messenger_type);
+  const sess=p.session;
+  const sessHtml=sess?sessionBadge(sess):'';
+  const sid=sess&&sess.session_id?sess.session_id:'';
+  const needAuth=p.messenger_type==='telegram_user'&&sess&&sess.status!=='authorized'&&sid;
   return `<div class="pc">
     <div class="pc-icon" style="${m.bg}">${m.ico}</div>
     <div class="pc-info">
@@ -474,10 +478,31 @@ function profileCard(p){
       <div class="pc-meta">
         <span class="badge ${m.bc}">${m.lbl}</span>
         <span class="badge ${p.is_active==1?'bg-green':'bg-red'}">${p.is_active==1?'Активен':'Отключён'}</span>
+        ${sessHtml}
       </div>
     </div>
-    <button class="btn btn-outline btn-sm" onclick="openEdit(${p.id})">Изменить</button>
+    <div style="display:flex;gap:6px;align-items:center">
+      ${needAuth?`<button class="btn btn-accent btn-sm" onclick="openQR(this.dataset.sid,event)" data-sid="${sid}">Авторизовать</button>`:''}
+      <button class="btn btn-outline btn-sm" onclick="openEdit(${p.id})">Изменить</button>
+    </div>
   </div>`;
+}
+
+function sessionBadge(sess){
+  if(sess.status==='authorized'){
+    const name=[sess.account_first_name,sess.account_last_name].filter(Boolean).join(' ');
+    const user=sess.account_username?`@${sess.account_username}`:(name||'');
+    return `<span class="badge bg-green">✓ ${esc(user)||'Авторизован'}</span>`;
+  }
+  return `<span class="badge bg-red" style="background:#fef2f2;color:#dc2626">Не авторизован</span>`;
+}
+
+function openQR(sessionId,e){
+  if(e)e.stopPropagation();
+  window.open(`/public/telegram/qr_auth.php?session_id=${encodeURIComponent(sessionId)}`,'_blank','width=520,height=700');
+  setTimeout(loadProfiles,5000);
+  setTimeout(loadProfiles,15000);
+  setTimeout(loadProfiles,30000);
 }
 
 function openNewProfile(){
@@ -519,6 +544,31 @@ async function openEdit(id){
   const p=r.profile,m=mInfo(p.messenger_type);
   G('mEditTitle').textContent=p.name;
   G('mEditDel').onclick=()=>deleteProfile(id);
+
+  // Блок сессии для telegram_user
+  let sessHtml='';
+  if(p.messenger_type==='telegram_user'){
+    const s=p.session;
+    const authorized=s&&s.status==='authorized';
+    const bg=authorized?'#f0fdf4':'#fef2f2';
+    const statusText=authorized?'✓ Telegram авторизован':'⚠ Telegram не авторизован';
+    const accountLine=s&&s.account_first_name
+      ?`<div style="color:#71717a;margin-top:2px">${esc(s.account_first_name)} ${esc(s.account_last_name||'')} ${s.account_username?'@'+esc(s.account_username):''}</div>`
+      :'';
+    const authBtn=(!authorized&&s&&s.session_id)
+      ?`<button onclick="openQR('${s.session_id}',event)" style="margin-top:10px;padding:7px 14px;background:#2563eb;color:#fff;border:none;border-radius:7px;cursor:pointer;font-size:13px;font-weight:500">Авторизовать через QR</button>`
+      :'';
+    sessHtml=`<div style="margin:12px 0;padding:14px;border-radius:9px;font-size:13px;background:${bg}">
+      <div style="font-weight:600">${statusText}</div>
+      ${accountLine}
+      ${authBtn}
+    </div>`;
+  }
+
+  const tokenHtml=p.messenger_type!=='telegram_user'
+    ?`<div class="mf"><label>${p.messenger_type==='max'?'API токен Max':'Bot Token'} <span style="color:var(--muted);font-weight:400">(оставьте пустым чтобы не менять)</span></label><input type="text" id="eToken" placeholder="Новый токен..."></div>`
+    :'';
+
   G('mEditBody').innerHTML=`
     <div style="display:flex;align-items:center;gap:12px;margin-bottom:20px;padding:14px;background:var(--bg);border-radius:10px">
       <div style="width:44px;height:44px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:20px;${m.bg}">${m.ico}</div>
@@ -529,7 +579,8 @@ async function openEdit(id){
       </div>
     </div>
     <div class="mf"><label>Название</label><input type="text" id="eName" value="${esc(p.name)}"></div>
-    ${p.messenger_type!=='telegram_user'?`<div class="mf"><label>${p.messenger_type==='max'?'API токен Max':'Bot Token'} <span style="color:var(--muted);font-weight:400">(оставьте пустым чтобы не менять)</span></label><input type="text" id="eToken" placeholder="Новый токен..."></div>`:''}
+    ${tokenHtml}
+    ${sessHtml}
     <div class="mf"><label>Статус</label><select id="eActive"><option value="1" ${p.is_active==1?'selected':''}>Активен</option><option value="0" ${p.is_active==0?'selected':''}>Отключён</option></select></div>
     <button class="btn btn-accent" onclick="saveEdit(${id})">Сохранить изменения</button>`;
   openM('mEdit');

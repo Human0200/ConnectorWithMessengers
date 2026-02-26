@@ -14,19 +14,40 @@ class ProfileRepository
 
     public function create(int $userId, string $messengerType, string $name, ?string $token = null, array $extra = []): ?array
     {
-        $stmt = $this->pdo->prepare("
-            INSERT INTO user_messenger_profiles (user_id, messenger_type, name, token, extra)
-            VALUES (?, ?, ?, ?, ?)
-        ");
-        $stmt->execute([
-            $userId,
-            $messengerType,
-            trim($name),
-            $token,
-            $extra ? json_encode($extra) : null,
-        ]);
+        $this->pdo->beginTransaction();
+        try {
+            $stmt = $this->pdo->prepare("
+                INSERT INTO user_messenger_profiles (user_id, messenger_type, name, token, extra)
+                VALUES (?, ?, ?, ?, ?)
+            ");
+            $stmt->execute([
+                $userId,
+                $messengerType,
+                trim($name),
+                $token,
+                $extra ? json_encode($extra) : null,
+            ]);
 
-        return $this->findById((int) $this->pdo->lastInsertId(), $userId);
+            $profileId = (int) $this->pdo->lastInsertId();
+
+            // Для telegram_user — автоматически создаём запись сессии
+            if ($messengerType === 'telegram_user') {
+                $sessionId   = 'tg_' . bin2hex(random_bytes(12));
+                $sessionFile = $sessionId . '.madeline';
+                $this->pdo->prepare("
+                    INSERT INTO madelineproto_sessions
+                        (user_id, profile_id, domain, session_id, session_file, session_name, status)
+                    VALUES (?, ?, '', ?, ?, ?, 'pending')
+                ")->execute([$userId, $profileId, $sessionId, $sessionFile, trim($name)]);
+            }
+
+            $this->pdo->commit();
+            return $this->findById($profileId, $userId);
+
+        } catch (\Throwable $e) {
+            $this->pdo->rollBack();
+            throw $e;
+        }
     }
 
     public function findById(int $id, ?int $userId = null): ?array
@@ -42,7 +63,15 @@ class ProfileRepository
         $stmt = $this->pdo->prepare($sql . " LIMIT 1");
         $stmt->execute($params);
         $row = $stmt->fetch(PDO::FETCH_ASSOC);
-        return $row ? $this->decode($row) : null;
+        if (!$row) return null;
+
+        $profile = $this->decode($row);
+
+        if ($profile['messenger_type'] === 'telegram_user') {
+            $profile['session'] = $this->getSession($profile['id']);
+        }
+
+        return $profile;
     }
 
     public function getByUser(int $userId, ?string $messengerType = null): array
@@ -58,8 +87,15 @@ class ProfileRepository
         $sql .= " ORDER BY created_at DESC";
         $stmt = $this->pdo->prepare($sql);
         $stmt->execute($params);
+        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-        return array_map([$this, 'decode'], $stmt->fetchAll(PDO::FETCH_ASSOC));
+        return array_map(function (array $row) {
+            $profile = $this->decode($row);
+            if ($profile['messenger_type'] === 'telegram_user') {
+                $profile['session'] = $this->getSession($profile['id']);
+            }
+            return $profile;
+        }, $rows);
     }
 
     public function update(int $id, int $userId, array $fields): bool
@@ -93,13 +129,99 @@ class ProfileRepository
 
     public function delete(int $id, int $userId): bool
     {
-        $stmt = $this->pdo->prepare("
-            DELETE FROM user_messenger_profiles WHERE id = ? AND user_id = ?
-        ");
+        $this->pdo->prepare(
+            "DELETE FROM madelineproto_sessions WHERE profile_id = ? AND user_id = ?"
+        )->execute([$id, $userId]);
+
+        $stmt = $this->pdo->prepare(
+            "DELETE FROM user_messenger_profiles WHERE id = ? AND user_id = ?"
+        );
         return $stmt->execute([$id, $userId]);
     }
 
-    // ─── Bitrix connections ──────────────────────────────────────
+    // ─── MadelineProto sessions ──────────────────────────────────
+
+    public function getSession(int $profileId): ?array
+    {
+        $stmt = $this->pdo->prepare(
+            "SELECT * FROM madelineproto_sessions WHERE profile_id = ? LIMIT 1"
+        );
+        $stmt->execute([$profileId]);
+        return $stmt->fetch(PDO::FETCH_ASSOC) ?: null;
+    }
+
+    public function getSessionBySessionId(string $sessionId): ?array
+    {
+        $stmt = $this->pdo->prepare("
+            SELECT ms.*, ump.user_id, ump.name AS profile_name, ump.messenger_type
+            FROM madelineproto_sessions ms
+            JOIN user_messenger_profiles ump ON ump.id = ms.profile_id
+            WHERE ms.session_id = ?
+            LIMIT 1
+        ");
+        $stmt->execute([$sessionId]);
+        return $stmt->fetch(PDO::FETCH_ASSOC) ?: null;
+    }
+
+    public function updateSessionFile(string $sessionId, string $newSessionFile): bool
+    {
+        $stmt = $this->pdo->prepare(
+            "UPDATE madelineproto_sessions SET session_file = ?, updated_at = NOW() WHERE session_id = ?"
+        );
+        return $stmt->execute([$newSessionFile, $sessionId]);
+    }
+
+    public function updateSessionStatus(
+        string  $sessionId,
+        string  $status,
+        ?int    $accountId        = null,
+        ?string $accountUsername  = null,
+        ?string $accountFirstName = null,
+        ?string $accountLastName  = null,
+        ?string $accountPhone     = null
+    ): bool {
+        // account_last_name может отсутствовать в старых схемах БД — проверяем динамически
+        $hasLastName = $this->columnExists('madelineproto_sessions', 'account_last_name');
+        $hasPhone    = $this->columnExists('madelineproto_sessions', 'account_phone');
+
+        $sql = "UPDATE madelineproto_sessions SET
+                status             = ?,
+                account_id         = COALESCE(?, account_id),
+                account_username   = COALESCE(?, account_username),
+                account_first_name = COALESCE(?, account_first_name)";
+
+        $params = [$status, $accountId, $accountUsername, $accountFirstName];
+
+        if ($hasLastName) {
+            $sql .= ", account_last_name = COALESCE(?, account_last_name)";
+            $params[] = $accountLastName;
+        }
+        if ($hasPhone) {
+            $sql .= ", account_phone = COALESCE(?, account_phone)";
+            $params[] = $accountPhone;
+        }
+
+        $sql .= ", updated_at = NOW() WHERE session_id = ?";
+        $params[] = $sessionId;
+
+        return $this->pdo->prepare($sql)->execute($params);
+    }
+
+    private function columnExists(string $table, string $column): bool
+    {
+        static $cache = [];
+        $key = $table . '.' . $column;
+        if (isset($cache[$key])) return $cache[$key];
+
+        $stmt = $this->pdo->prepare(
+            "SELECT COUNT(*) FROM information_schema.COLUMNS
+             WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?"
+        );
+        $stmt->execute([$table, $column]);
+        return $cache[$key] = (bool) $stmt->fetchColumn();
+    }
+
+    // ─── Connections ─────────────────────────────────────────────
 
     public function getConnections(int $profileId, int $userId): array
     {
@@ -117,68 +239,33 @@ class ProfileRepository
     public function saveConnection(int $userId, int $profileId, string $domain, ?string $connectorId = null, ?int $openlineId = null): bool
     {
         $stmt = $this->pdo->prepare("
-            INSERT INTO profile_bitrix_connections
-                (user_id, profile_id, domain, connector_id, openline_id)
+            INSERT INTO profile_bitrix_connections (user_id, profile_id, domain, connector_id, openline_id)
             VALUES (?, ?, ?, ?, ?)
             ON DUPLICATE KEY UPDATE
                 connector_id = VALUES(connector_id),
                 openline_id  = COALESCE(VALUES(openline_id), openline_id),
-                is_active    = 1,
-                updated_at   = NOW()
+                is_active    = 1, updated_at = NOW()
         ");
         return $stmt->execute([$userId, $profileId, $domain, $connectorId, $openlineId]);
-    }
-
-    public function updateOpenline(int $profileId, string $domain, int $openlineId): bool
-    {
-        $stmt = $this->pdo->prepare("
-            UPDATE profile_bitrix_connections
-            SET openline_id = ?, updated_at = NOW()
-            WHERE profile_id = ? AND domain = ?
-        ");
-        return $stmt->execute([$openlineId, $profileId, $domain]);
     }
 
     public function deleteConnection(int $profileId, int $userId, string $domain): bool
     {
         $stmt = $this->pdo->prepare("
-            DELETE FROM profile_bitrix_connections
-            WHERE profile_id = ? AND user_id = ? AND domain = ?
+            DELETE FROM profile_bitrix_connections WHERE profile_id = ? AND user_id = ? AND domain = ?
         ");
         return $stmt->execute([$profileId, $userId, $domain]);
-    }
-
-    /**
-     * Найти профиль по домену — для входящих вебхуков
-     */
-    public function findByDomainAndType(string $domain, string $messengerType): ?array
-    {
-        $stmt = $this->pdo->prepare("
-            SELECT p.*, pbc.connector_id, pbc.openline_id, pbc.domain AS connected_domain
-            FROM profile_bitrix_connections pbc
-            JOIN user_messenger_profiles p ON p.id = pbc.profile_id
-            WHERE pbc.domain = ?
-              AND p.messenger_type = ?
-              AND pbc.is_active = 1
-              AND p.is_active = 1
-            LIMIT 1
-        ");
-        $stmt->execute([$domain, $messengerType]);
-        $row = $stmt->fetch(PDO::FETCH_ASSOC);
-        return $row ? $this->decode($row) : null;
     }
 
     public function getStats(int $userId): array
     {
         $stmt = $this->pdo->prepare("
-            SELECT
-                COUNT(*) AS total,
-                SUM(is_active = 1) AS active,
-                SUM(messenger_type = 'max') AS max_count,
-                SUM(messenger_type = 'telegram_bot') AS telegram_bot_count,
-                SUM(messenger_type = 'telegram_user') AS telegram_user_count
-            FROM user_messenger_profiles
-            WHERE user_id = ?
+            SELECT COUNT(*) AS total,
+                   SUM(is_active = 1) AS active,
+                   SUM(messenger_type = 'max') AS max_count,
+                   SUM(messenger_type = 'telegram_bot') AS telegram_bot_count,
+                   SUM(messenger_type = 'telegram_user') AS telegram_user_count
+            FROM user_messenger_profiles WHERE user_id = ?
         ");
         $stmt->execute([$userId]);
         return $stmt->fetch(PDO::FETCH_ASSOC) ?: [];
