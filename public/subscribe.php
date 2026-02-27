@@ -21,7 +21,7 @@ $tokenRepository = new TokenRepository($pdo);
 $data = json_decode(file_get_contents('php://input'), true) ?: [];
 
 $MaxService = new MaxService($tokenRepository, $logger, $config['max']['api_url']);
-$MaxService ->setWebhook("https://bitrix-connector.lead-space.ru/connector_max/Bitrix2.0/public/webhook.php", $data['domain']);
+$MaxService ->setWebhook("https://bitrix-connector.lead-space.ru/ConnectorHub/public/webhook.php", $data['domain']);
 
 
 return json_encode([
