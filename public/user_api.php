@@ -27,7 +27,8 @@ $tokenRepo   = new TokenRepository($pdo);
 $authMidd    = new AuthMiddleware($userRepo);
 
 $authCtrl    = new AuthController($userRepo, $authMidd, $logger);
-$profileCtrl = new ProfileController($profileRepo, $tokenRepo, $authMidd, $logger);
+// ← ИЗМЕНЕНО: добавлен $config (нужен для формирования URL webhook у telegram_bot)
+$profileCtrl = new ProfileController($profileRepo, $tokenRepo, $authMidd, $logger, $config);
 
 header('Content-Type: application/json; charset=utf-8');
 header('Access-Control-Allow-Origin: *');
@@ -70,17 +71,13 @@ function route(
     AuthController    $auth,
     ProfileController $profile
 ): array {
-    // Сегменты: /auth/regen-token → ['auth', 'regen-token']
-    //           /profiles/5/connect → ['profiles', '5', 'connect']
     $segments = array_values(array_filter(explode('/', $path), 'strlen'));
 
     $r0 = $segments[0] ?? '';
     $r1 = $segments[1] ?? null;
     $r2 = $segments[2] ?? null;
 
-    // Числовой ID только если r1 — чисто цифровой
     $id  = ($r1 !== null && ctype_digit((string)$r1)) ? (int)$r1 : null;
-    // Подресурс: если есть числовой ID — это r2, иначе r1
     $sub = ($id !== null) ? $r2 : $r1;
 
     // ── AUTH ─────────────────────────────────────────────────

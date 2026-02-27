@@ -17,12 +17,12 @@ class ProfileController
         private ProfileRepository $profileRepository,
         private TokenRepository   $tokenRepository,
         private AuthMiddleware    $authMiddleware,
-        private Logger            $logger
+        private Logger            $logger,
+        private array             $config = []   // ← ДОБАВЛЕНО: нужен для URL webhook
     ) {}
 
     /**
      * GET /profiles
-     * Все профили текущего пользователя
      */
     public function index(): array
     {
@@ -30,10 +30,8 @@ class ProfileController
         $profiles = $this->profileRepository->getByUser($user['id']);
         $stats    = $this->profileRepository->getStats($user['id']);
 
-        // Для каждого профиля добавляем привязанные домены
         foreach ($profiles as &$profile) {
             $profile['connections'] = $this->profileRepository->getConnections($profile['id'], $user['id']);
-            // Скрываем токен в листинге
             unset($profile['token']);
         }
 
@@ -46,8 +44,12 @@ class ProfileController
 
     /**
      * POST /profiles
-     * Создать профиль мессенджера
      * Body: { messenger_type, name, token? }
+     *
+     * ← ИЗМЕНЕНО для telegram_bot:
+     *   1. Проверяет токен через getMe
+     *   2. Создаёт профиль
+     *   3. Регистрирует webhook: /public/webhook.php?bot_token=TOKEN
      */
     public function create(array $data): array
     {
@@ -57,7 +59,6 @@ class ProfileController
         $name  = trim($data['name'] ?? '');
         $token = trim($data['token'] ?? '') ?: null;
 
-        // Валидация
         if (!in_array($type, self::ALLOWED_TYPES, true)) {
             return ['success' => false, 'errors' => ['messenger_type' => 'Неподдерживаемый тип: ' . $type]];
         }
@@ -66,15 +67,75 @@ class ProfileController
             return ['success' => false, 'errors' => ['name' => 'Введите название профиля']];
         }
 
-        // Для Max и telegram_bot токен обязателен
         if (in_array($type, ['max', 'telegram_bot'], true) && empty($token)) {
             return ['success' => false, 'errors' => ['token' => 'Токен обязателен для этого типа']];
         }
 
-        $profile = $this->profileRepository->create($user['id'], $type, $name, $token);
+        // ← ДОБАВЛЕНО: для max — проверяем токен через GET /me
+        $extra = [];
+        if ($type === 'max') {
+            $botInfo = $this->callMaxApi($token, 'me', [], 'GET');
+            if (empty($botInfo['success'])) {
+                return ['success' => false, 'errors' => [
+                    'token' => 'Ошибка Max API: ' . ($botInfo['error'] ?? 'Неверный токен'),
+                ]];
+            }
+            $extra = [
+                'bot_id'       => $botInfo['data']['id']         ?? null,
+                'bot_username' => $botInfo['data']['username']    ?? null,
+                'bot_name'     => $botInfo['data']['name']        ?? null,
+            ];
+        }
+
+        // ← ДОБАВЛЕНО: для telegram_bot — проверяем токен и собираем данные бота
+        if ($type === 'telegram_bot') {
+            $botInfo = $this->callTelegramApi($token, 'getMe');
+            if (empty($botInfo['ok'])) {
+                return ['success' => false, 'errors' => [
+                    'token' => 'Ошибка Telegram API: ' . ($botInfo['description'] ?? 'Неверный токен'),
+                ]];
+            }
+            $extra = [
+                'bot_id'       => $botInfo['result']['id']        ?? null,
+                'bot_username' => $botInfo['result']['username']   ?? null,
+                'bot_name'     => $botInfo['result']['first_name'] ?? null,
+            ];
+        }
+
+        $profile = $this->profileRepository->create($user['id'], $type, $name, $token, $extra);
 
         if (!$profile) {
             return ['success' => false, 'errors' => ['general' => 'Ошибка создания профиля']];
+        }
+
+        // ← ДОБАВЛЕНО: для max — регистрируем webhook сразу после создания профиля
+        if ($type === 'max') {
+            $webhookResult = $this->registerMaxWebhook($token);
+            if (!($webhookResult['success'] ?? false)) {
+                $profile['webhook_warning'] = 'Профиль создан, но webhook не установлен: '
+                    . ($webhookResult['error'] ?? 'неизвестная ошибка');
+            } else {
+                $profile['webhook_set'] = true;
+            }
+            $this->logger->info('max webhook registered', [
+                'profile_id' => $profile['id'],
+                'ok'         => $webhookResult['success'] ?? false,
+            ]);
+        }
+
+        // ← ДОБАВЛЕНО: регистрируем webhook сразу после создания профиля
+        if ($type === 'telegram_bot') {
+            $webhookResult = $this->registerBotWebhook($token);
+            if (!($webhookResult['ok'] ?? false)) {
+                $profile['webhook_warning'] = 'Профиль создан, но webhook не установлен: '
+                    . ($webhookResult['description'] ?? 'неизвестная ошибка');
+            } else {
+                $profile['webhook_set'] = true;
+            }
+            $this->logger->info('telegram_bot webhook registered', [
+                'profile_id' => $profile['id'],
+                'ok'         => $webhookResult['ok'] ?? false,
+            ]);
         }
 
         $this->logger->info('Profile created', [
@@ -83,7 +144,6 @@ class ProfileController
             'messenger_type' => $type,
         ]);
 
-        // Возвращаем токен только при создании
         return ['success' => true, 'profile' => $profile];
     }
 
@@ -107,6 +167,8 @@ class ProfileController
     /**
      * PATCH /profiles/{id}
      * Body: { name?, token?, is_active? }
+     *
+     * ← ИЗМЕНЕНО для telegram_bot: при смене токена переподписывает webhook
      */
     public function update(int $id, array $data): array
     {
@@ -123,8 +185,59 @@ class ProfileController
             return ['success' => false, 'errors' => ['name' => 'Название не может быть пустым']];
         }
 
-        $this->profileRepository->update($id, $user['id'], $fields);
+        // ← ДОБАВЛЕНО: смена токена у max — нужно переподписать webhook
+        if ($profile['messenger_type'] === 'max' && !empty($fields['token'])) {
+            $newToken = trim($fields['token']);
 
+            $botInfo = $this->callMaxApi($newToken, 'me', [], 'GET');
+            if (empty($botInfo['success'])) {
+                return ['success' => false, 'errors' => [
+                    'token' => 'Ошибка Max API: ' . ($botInfo['error'] ?? 'Неверный токен'),
+                ]];
+            }
+
+            // Снимаем старый webhook
+            if (!empty($profile['token'])) {
+                $this->deleteMaxWebhook($profile['token']);
+            }
+
+            // Ставим новый
+            $this->registerMaxWebhook($newToken);
+
+            $fields['extra'] = [
+                'bot_id'       => $botInfo['data']['id']         ?? null,
+                'bot_username' => $botInfo['data']['username']    ?? null,
+                'bot_name'     => $botInfo['data']['name']        ?? null,
+            ];
+        }
+
+        // ← ДОБАВЛЕНО: смена токена у telegram_bot — нужно переподписать webhook
+        if ($profile['messenger_type'] === 'telegram_bot' && !empty($fields['token'])) {
+            $newToken = trim($fields['token']);
+
+            $botInfo = $this->callTelegramApi($newToken, 'getMe');
+            if (empty($botInfo['ok'])) {
+                return ['success' => false, 'errors' => [
+                    'token' => 'Ошибка Telegram API: ' . ($botInfo['description'] ?? 'Неверный токен'),
+                ]];
+            }
+
+            // Снимаем старый webhook
+            if (!empty($profile['token'])) {
+                $this->callTelegramApi($profile['token'], 'deleteWebhook');
+            }
+
+            // Ставим новый
+            $this->registerBotWebhook($newToken);
+
+            $fields['extra'] = [
+                'bot_id'       => $botInfo['result']['id']        ?? null,
+                'bot_username' => $botInfo['result']['username']   ?? null,
+                'bot_name'     => $botInfo['result']['first_name'] ?? null,
+            ];
+        }
+
+        $this->profileRepository->update($id, $user['id'], $fields);
         $updated = $this->profileRepository->findById($id, $user['id']);
 
         $this->logger->info('Profile updated', ['user_id' => $user['id'], 'profile_id' => $id]);
@@ -134,6 +247,8 @@ class ProfileController
 
     /**
      * DELETE /profiles/{id}
+     *
+     * ← ИЗМЕНЕНО для telegram_bot: снимает webhook перед удалением
      */
     public function delete(int $id): array
     {
@@ -142,6 +257,18 @@ class ProfileController
 
         if (!$profile) {
             return ['success' => false, 'error' => 'Профиль не найден'];
+        }
+
+        // ← ДОБАВЛЕНО
+        if ($profile['messenger_type'] === 'max' && !empty($profile['token'])) {
+            $this->deleteMaxWebhook($profile['token']);
+            $this->logger->info('max webhook deleted', ['profile_id' => $id]);
+        }
+
+        // ← ДОБАВЛЕНО
+        if ($profile['messenger_type'] === 'telegram_bot' && !empty($profile['token'])) {
+            $this->callTelegramApi($profile['token'], 'deleteWebhook', ['drop_pending_updates' => true]);
+            $this->logger->info('telegram_bot webhook deleted', ['profile_id' => $id]);
         }
 
         $this->profileRepository->delete($id, $user['id']);
@@ -153,8 +280,6 @@ class ProfileController
 
     /**
      * POST /profiles/{id}/connect
-     * Привязать профиль к домену Bitrix24
-     * Body: { domain, openline_id? }
      */
     public function connect(int $profileId, array $data): array
     {
@@ -172,7 +297,6 @@ class ProfileController
             return ['success' => false, 'errors' => ['domain' => 'Введите домен']];
         }
 
-        // Проверяем что домен установил приложение и принадлежит этому пользователю
         $bitrixData = $this->tokenRepository->findByDomain($domain);
         if (!$bitrixData) {
             return ['success' => false, 'errors' => ['domain' => 'Домен не найден. Установите приложение в Bitrix24.']];
@@ -182,7 +306,6 @@ class ProfileController
             return ['success' => false, 'errors' => ['domain' => 'Этот домен привязан к другому аккаунту']];
         }
 
-        // Получаем или создаём connector_id
         $connectorId = $this->tokenRepository->getConnectorId($domain, $profile['messenger_type']);
 
         $this->profileRepository->saveConnection(
@@ -193,7 +316,6 @@ class ProfileController
             $openlineId
         );
 
-        // Привязываем домен к пользователю
         if (empty($bitrixData['user_id'])) {
             $this->tokenRepository->linkUser($domain, $user['id']);
         }
@@ -214,8 +336,6 @@ class ProfileController
 
     /**
      * DELETE /profiles/{id}/connect
-     * Отвязать профиль от домена
-     * Body: { domain }
      */
     public function disconnect(int $profileId, array $data): array
     {
@@ -233,8 +353,6 @@ class ProfileController
 
     /**
      * PATCH /profiles/{id}/openline
-     * Установить ID открытой линии
-     * Body: { domain, openline_id }
      */
     public function setOpenline(int $profileId, array $data): array
     {
@@ -253,7 +371,6 @@ class ProfileController
 
         $this->profileRepository->updateOpenline($profileId, $domain, $openlineId);
 
-        // Обновляем также в bitrix_integration_tokens
         $connectorId = $this->tokenRepository->getConnectorId($domain, $profile['messenger_type']);
         if ($connectorId) {
             $this->tokenRepository->updateLine($connectorId, $openlineId);
@@ -264,7 +381,6 @@ class ProfileController
 
     /**
      * GET /domains
-     * Список доменов Bitrix24 текущего пользователя
      */
     public function getDomains(): array
     {
@@ -272,5 +388,122 @@ class ProfileController
         $domains = $this->tokenRepository->getDomainsByUser($user['id']);
 
         return ['success' => true, 'domains' => $domains];
+    }
+
+    // ─── ДОБАВЛЕНО: private методы для max webhook ───────────────
+
+    /**
+     * Регистрируем webhook для Max бота.
+     * URL: https://yoursite.com/public/webhook.php?max_token=TOKEN
+     */
+    private function registerMaxWebhook(string $token): array
+    {
+        $appUrl     = rtrim($this->config['app']['url'] ?? '', '/');
+        $webhookUrl = $appUrl . '/public/webhook.php?max_token=' . urlencode($token);
+
+        return $this->callMaxApi($token, 'subscriptions', [
+            'url'          => $webhookUrl,
+            'update_types' => ['message_created', 'bot_started'],
+            'secret'       => 'connector_hub',
+        ]);
+    }
+
+    private function deleteMaxWebhook(string $token): array
+    {
+        $appUrl     = rtrim($this->config['app']['url'] ?? '', '/');
+        $webhookUrl = $appUrl . '/public/webhook.php?max_token=' . urlencode($token);
+
+        return $this->callMaxApi($token, 'subscriptions', ['url' => $webhookUrl], 'DELETE');
+    }
+
+    private function callMaxApi(string $token, string $endpoint, array $data = [], string $method = 'POST'): array
+    {
+        $baseUrl = 'https://platform-api.max.ru';
+        $url     = $baseUrl . '/' . ltrim($endpoint, '/');
+
+        $ch = curl_init($url);
+        $headers = [
+            'Content-Type: application/json',
+            'Authorization: ' . trim($token),
+        ];
+        $options = [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_HTTPHEADER     => $headers,
+            CURLOPT_TIMEOUT        => 15,
+            CURLOPT_CONNECTTIMEOUT => 5,
+            CURLOPT_SSL_VERIFYPEER => true,
+        ];
+
+        if ($method === 'POST') {
+            $options[CURLOPT_POST]       = true;
+            $options[CURLOPT_POSTFIELDS] = json_encode($data, JSON_UNESCAPED_UNICODE);
+        } elseif ($method === 'GET') {
+            $options[CURLOPT_HTTPGET] = true;
+        } elseif ($method === 'DELETE') {
+            $options[CURLOPT_CUSTOMREQUEST] = 'DELETE';
+            if (!empty($data)) {
+                $options[CURLOPT_POSTFIELDS] = json_encode($data, JSON_UNESCAPED_UNICODE);
+            }
+        }
+
+        curl_setopt_array($ch, $options);
+        $response = curl_exec($ch);
+        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $error    = curl_error($ch);
+        curl_close($ch);
+
+        if ($error) {
+            return ['success' => false, 'error' => 'cURL: ' . $error];
+        }
+
+        $result = json_decode($response, true);
+
+        return ($httpCode === 200)
+            ? ['success' => true,  'data'  => $result]
+            : ['success' => false, 'error' => ($result['message'] ?? 'HTTP ' . $httpCode), 'response' => $result];
+    }
+
+    // ─── ДОБАВЛЕНО: private методы для telegram_bot webhook ──────
+
+    /**
+     * Регистрируем webhook для бота.
+     * URL: https://yoursite.com/public/webhook.php?bot_token=TOKEN
+     *
+     * В WebhookController читаем $_GET['bot_token'] и ищем профиль по нему.
+     */
+    private function registerBotWebhook(string $token): array
+    {
+        $appUrl     = rtrim($this->config['app']['url'] ?? '', '/');
+        $webhookUrl = $appUrl . '/public/webhook.php?bot_token=' . urlencode($token);
+
+        return $this->callTelegramApi($token, 'setWebhook', [
+            'url'                  => $webhookUrl,
+            'allowed_updates'      => ['message', 'edited_message', 'callback_query'],
+            'drop_pending_updates' => true,
+        ]);
+    }
+
+    private function callTelegramApi(string $token, string $method, array $params = []): array
+    {
+        $url = 'https://api.telegram.org/bot' . $token . '/' . $method;
+
+        $ch = curl_init($url);
+        curl_setopt_array($ch, [
+            CURLOPT_POST           => true,
+            CURLOPT_POSTFIELDS     => json_encode($params),
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_HTTPHEADER     => ['Content-Type: application/json'],
+            CURLOPT_TIMEOUT        => 15,
+            CURLOPT_CONNECTTIMEOUT => 5,
+        ]);
+        $response = curl_exec($ch);
+        $error    = curl_error($ch);
+        curl_close($ch);
+
+        if ($error) {
+            return ['ok' => false, 'description' => 'cURL: ' . $error];
+        }
+
+        return json_decode($response, true) ?? ['ok' => false, 'description' => 'Invalid JSON'];
     }
 }

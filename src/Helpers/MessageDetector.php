@@ -6,34 +6,42 @@ namespace BitrixTelegram\Helpers;
 
 class MessageDetector
 {
-    public const SOURCE_BITRIX = 'bitrix';
-    public const SOURCE_TELEGRAM = 'telegram';
-    public const SOURCE_TELEGRAM_USER = 'telegram_user';
-    public const SOURCE_MAX = 'max';
-    public const SOURCE_UNKNOWN = 'unknown';
+    public const SOURCE_BITRIX        = 'bitrix';
+    public const SOURCE_TELEGRAM      = 'telegram';
+    public const SOURCE_TELEGRAM_BOT  = 'telegram_bot';  // Bot API webhook (?bot_token=xxx в URL)
+    public const SOURCE_TELEGRAM_USER = 'telegram_user'; // от listen_sessions.php / session_worker.php
+    public const SOURCE_MAX            = 'max';
+    public const SOURCE_UNKNOWN        = 'unknown';
 
     /**
-     * Определяет источник сообщения по структуре данных
+     * Определяет источник сообщения по структуре данных.
+     *
+     * Порядок важен:
+     *  1. Bitrix24
+     *  2. Telegram Bot  — ?bot_token=xxx в URL ИЛИ update_id в теле
+     *  3. Telegram User — поле profile_id (от listen_sessions.php)
+     *  4. Max
      */
     public function detectSource(array $data): string
     {
-        // Проверяем Bitrix24
         if ($this->isBitrixMessage($data)) {
             return self::SOURCE_BITRIX;
         }
 
-        // Проверяем Telegram
-        if ($this->isTelegramMessage($data)) {
-            return self::SOURCE_TELEGRAM;
+        // Проверяем Bot ДО telegram_user — update_id не должен попасть в telegram_user
+        if ($this->isTelegramBotMessage($data)) {
+            return self::SOURCE_TELEGRAM_BOT;
         }
 
-        // Telegram User (от listen_sessions.php / session_worker.php)
-        // Детектируем по profile_id (новая архитектура) или session_name (старая)
         if (isset($data['profile_id']) || isset($data['session_name'])) {
             return self::SOURCE_TELEGRAM_USER;
         }
 
-        // Проверяем Max
+        // Проверяем Max Bot ДО стандартного isMaxMessage
+        if ($this->isMaxBotMessage($data)) {
+            return self::SOURCE_MAX;
+        }
+
         if ($this->isMaxMessage($data)) {
             return self::SOURCE_MAX;
         }
@@ -41,38 +49,40 @@ class MessageDetector
         return self::SOURCE_UNKNOWN;
     }
 
-    /**
-     * Проверяет, является ли сообщение от Bitrix24
-     */
     private function isBitrixMessage(array $data): bool
     {
         if (!empty($data['event']) && $data['event'] === 'ONIMCONNECTORMESSAGEADD') {
             return true;
         }
-
         if (!empty($data['PLACEMENT']) && $data['PLACEMENT'] === 'SETTING_CONNECTOR') {
             return true;
         }
-
         if (!empty($data['auth']['domain']) && !empty($data['auth']['access_token'])) {
             return true;
         }
-
         return false;
     }
 
     /**
-     * Проверяет, является ли сообщение от Telegram
+     * Telegram Bot API webhook.
+     * Признак A: ?bot_token=xxx в URL — зашиваем при setWebhook в ProfileController.
+     * Признак B: update_id в теле — стандарт Bot API.
      */
-    private function isTelegramMessage(array $data): bool
+    private function isTelegramBotMessage(array $data): bool
     {
+        if (!empty($_GET['bot_token'])) {
+            return true;
+        }
+
         if (isset($data['update_id'])) {
             return true;
         }
 
-        if (isset($data['message']['from']['id']) &&
+        if (
+            isset($data['message']['from']['id']) &&
             isset($data['message']['chat']['id']) &&
-            isset($data['message']['message_id'])) {
+            isset($data['message']['message_id'])
+        ) {
             return true;
         }
 
@@ -80,48 +90,39 @@ class MessageDetector
     }
 
     /**
-     * Проверяет, является ли сообщение от Max
+     * Max Bot профильный webhook.
+     * Признак: ?max_token=xxx в URL — зашивается при setWebhook в ProfileController.
      */
+    private function isMaxBotMessage(array $data): bool
+    {
+        if (!empty($_GET['max_token'])) {
+            return true;
+        }
+        return false;
+    }
+
     private function isMaxMessage(array $data): bool
     {
-        if (isset($data['message']['recipient'])) {
-            return true;
-        }
-
-        return false;
+        return isset($data['message']['recipient']);
     }
 
-    /**
-     * Определяет тип события Bitrix24
-     */
     public function detectBitrixEventType(array $data): ?string
     {
-        if (!empty($data['event'])) {
-            return $data['event'];
-        }
-
-        if (!empty($data['PLACEMENT'])) {
-            return 'PLACEMENT_' . $data['PLACEMENT'];
-        }
-
+        if (!empty($data['event']))     return $data['event'];
+        if (!empty($data['PLACEMENT'])) return 'PLACEMENT_' . $data['PLACEMENT'];
         return null;
     }
 
-    /**
-     * Определяет тип сообщения (текст, фото, документ и т.д.)
-     */
     public function detectMessageType(array $message, string $source): string
     {
         switch ($source) {
             case self::SOURCE_TELEGRAM:
+            case self::SOURCE_TELEGRAM_BOT:
                 return $this->detectTelegramMessageType($message);
-
             case self::SOURCE_MAX:
                 return $this->detectMaxMessageType($message);
-
             case self::SOURCE_BITRIX:
                 return $this->detectBitrixMessageType($message);
-
             default:
                 return 'unknown';
         }
@@ -138,60 +139,39 @@ class MessageDetector
         if (isset($message['location'])) return 'location';
         if (isset($message['contact']))  return 'contact';
         if (isset($message['text']))     return 'text';
-
         return 'unknown';
     }
 
     private function detectMaxMessageType(array $message): string
     {
-        if (isset($message['type'])) {
-            return $message['type'];
-        }
-
+        if (isset($message['type']))      return $message['type'];
         if (isset($message['file_url']))  return 'file';
         if (isset($message['image_url'])) return 'image';
         if (isset($message['text']))      return 'text';
-
         return 'unknown';
     }
 
     private function detectBitrixMessageType(array $message): string
     {
-        if (!isset($message['message'])) {
-            return 'unknown';
-        }
-
+        if (!isset($message['message'])) return 'unknown';
         $msg = $message['message'];
-
         if (isset($msg['files']) && !empty($msg['files'])) {
-            $file = $msg['files'][0];
-            return $file['type'] ?? 'file';
+            return $msg['files'][0]['type'] ?? 'file';
         }
-
         if (isset($msg['text'])) return 'text';
-
         return 'unknown';
     }
 
-    /**
-     * Извлекает chat_id в зависимости от источника
-     */
     public function extractChatId(array $data, string $source): ?string
     {
         switch ($source) {
             case self::SOURCE_TELEGRAM:
-                return (string)($data['message']['chat']['id'] ??
-                                $data['chat']['id'] ?? null);
-
+            case self::SOURCE_TELEGRAM_BOT:
+                return (string)($data['message']['chat']['id'] ?? $data['chat']['id'] ?? null);
             case self::SOURCE_MAX:
-                return $data['message']['chat_id'] ??
-                       $data['chat']['id'] ??
-                       $data['chat_id'] ?? null;
-
+                return $data['message']['chat_id'] ?? $data['chat']['id'] ?? $data['chat_id'] ?? null;
             case self::SOURCE_BITRIX:
-                return $data['data']['MESSAGES'][0]['chat']['id'] ??
-                       $data['chat']['id'] ?? null;
-
+                return $data['data']['MESSAGES'][0]['chat']['id'] ?? $data['chat']['id'] ?? null;
             default:
                 return null;
         }
@@ -204,14 +184,12 @@ class MessageDetector
 
     public function isReplyMessage(array $message, string $source): bool
     {
-        if ($source === self::SOURCE_TELEGRAM) {
+        if (in_array($source, [self::SOURCE_TELEGRAM, self::SOURCE_TELEGRAM_BOT], true)) {
             return isset($message['reply_to_message']);
         }
-
         if ($source === self::SOURCE_MAX) {
             return isset($message['reply_to_id']) || isset($message['quoted_message']);
         }
-
         return false;
     }
 }

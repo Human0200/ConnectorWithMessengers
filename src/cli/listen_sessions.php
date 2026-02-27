@@ -234,7 +234,6 @@ while (true) {
             if (!empty($updates)) {
                 
                 foreach ($updates as $update) {
-                    print_r($update);
                     $updateId = $update['update_id'] ?? 0;
                     if ($updateId > $s['last_update_id']) {
                         $s['last_update_id'] = $updateId;
