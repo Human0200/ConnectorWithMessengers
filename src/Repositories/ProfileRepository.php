@@ -10,6 +10,11 @@ class ProfileRepository
 {
     public function __construct(private PDO $pdo) {}
 
+    public function getPdo(): PDO
+    {
+        return $this->pdo;
+    }
+
     // ─── Profiles ────────────────────────────────────────────────
 
     public function create(int $userId, string $messengerType, string $name, ?string $token = null, array $extra = []): ?array

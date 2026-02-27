@@ -84,27 +84,7 @@ foreach ($sessions as $session) {
 
         echo colorize("🔄 Загрузка сессии: {$session['session_name']}...\n", 'cyan');
 
-        try {
-            $tempClassName = 'TempHandler_' . md5($sessionPath);
-
-            if (!class_exists($tempClassName)) {
-                eval("
-                    class {$tempClassName} extends \\danog\\MadelineProto\\EventHandler {
-                        public function getReportPeers() { return []; }
-                    }
-                ");
-            }
-
-            $instance = new API($sessionPath);
-            $instance->start();
-            $instance->stop();
-
-            echo colorize("✅ Сессия очищена от старого EventHandler\n", 'green');
-
-        } catch (\Exception $e) {
-            echo colorize("⚠️  Не удалось очистить EventHandler: " . $e->getMessage() . "\n", 'yellow');
-        }
-
+        // Просто создаем экземпляр без попыток переопределения EventHandler через eval
         $instance = new API($sessionPath);
         $instance->start();
 
@@ -114,7 +94,7 @@ foreach ($sessions as $session) {
                 'profile_id'     => $session['profile_id'],
                 'session_id'     => $session['session_id'],
                 'session_name'   => $session['session_name'],
-                'account_name'   => ($session['account_first_name'] ?? '') . ' (@' . ($session['account_username'] ?? 'N/A') . ')',
+                'account_name'   => trim(($session['account_first_name'] ?? '') . ' (@' . ($session['account_username'] ?? 'N/A') . ')'),
                 'last_update_id' => 0,
             ];
             echo colorize("✅ Сессия загружена: {$session['session_name']}\n", 'green');
@@ -139,17 +119,21 @@ foreach ($sessionInstances as $i => $s) {
 }
 echo "\n";
 
-// Функция для извлечения chat_id
+// Функция для извлечения chat_id (совместимость с PHP 7)
 function extractChatId($peer)
 {
     if (is_array($peer)) {
         $type = $peer['_'] ?? 'unknown';
-        return match ($type) {
-            'peerUser'    => 'user_' . ($peer['user_id'] ?? ''),
-            'peerChat'    => 'chat_' . ($peer['chat_id'] ?? ''),
-            'peerChannel' => 'channel_' . ($peer['channel_id'] ?? ''),
-            default       => $type
-        };
+        
+        if ($type === 'peerUser') {
+            return 'user_' . ($peer['user_id'] ?? '');
+        } elseif ($type === 'peerChat') {
+            return 'chat_' . ($peer['chat_id'] ?? '');
+        } elseif ($type === 'peerChannel') {
+            return 'channel_' . ($peer['channel_id'] ?? '');
+        }
+        
+        return $type;
     }
     return 'user_' . $peer;
 }
@@ -163,10 +147,12 @@ function getSenderInfo($madelineProto, $from_id)
         $lastName  = $userInfo['User']['last_name'] ?? '';
         $username  = $userInfo['User']['username'] ?? '';
         $fullName  = trim($firstName . ' ' . $lastName);
-        if ($username) {
+        
+        if (!empty($username)) {
             $fullName .= " (@$username)";
         }
-        return $fullName;
+        
+        return !empty($fullName) ? $fullName : "Пользователь $from_id";
     } catch (\Exception $e) {
         return "Пользователь $from_id";
     }
@@ -176,7 +162,7 @@ function getSenderInfo($madelineProto, $from_id)
 function sendToWebhook($sessionData, $message, $senderName = null)
 {
     try {
-        $webhookUrl = 'http://localhost:8911/public/admin.html#';
+        $webhookUrl = 'http://localhost:8912/public/webhook.php';
 
         $postData = [
             'profile_id'   => $sessionData['profile_id'],   // вместо domain
@@ -202,7 +188,7 @@ function sendToWebhook($sessionData, $message, $senderName = null)
         ]);
 
         $response = curl_exec($ch);
-        $httpCode  = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
         curl_close($ch);
 
         if ($httpCode !== 200) {
@@ -233,7 +219,8 @@ echo colorize("║  🎧 ПРОСЛУШИВАНИЕ ЗАПУЩЕНО (Ctrl+C д�
 echo colorize("╚════════════════════════════════════════════════════════════════╝\n", 'green');
 echo "\n";
 
-// Основной цикл
+// Основной цикл с контролем памяти
+$iteration = 0;
 while (true) {
     foreach ($sessionInstances as &$s) {
         try {
@@ -245,7 +232,9 @@ while (true) {
             $updates = $s['instance']->getUpdates($params);
 
             if (!empty($updates)) {
+                
                 foreach ($updates as $update) {
+                    print_r($update);
                     $updateId = $update['update_id'] ?? 0;
                     if ($updateId > $s['last_update_id']) {
                         $s['last_update_id'] = $updateId;
@@ -278,11 +267,14 @@ while (true) {
                                     echo " ";
                                     echo colorize("К: $chatId", 'white');
 
-                                    if ($text) {
+                                    if (!empty($text)) {
                                         $displayText = strlen($text) > 60 ? substr($text, 0, 60) . '...' : $text;
                                         echo " " . colorize($displayText, 'gray');
                                     }
                                     echo "\n";
+                                    
+                                    // Отправляем в webhook
+                                    sendToWebhook($s, $message, $senderName);
                                 } else {
                                     echo colorize(date('[H:i:s]'), 'cyan');
                                     echo " ";
@@ -292,14 +284,15 @@ while (true) {
                                     echo " ";
                                     echo colorize($chatId, 'white');
 
-                                    if ($text) {
+                                    if (!empty($text)) {
                                         $displayText = strlen($text) > 60 ? substr($text, 0, 60) . '...' : $text;
                                         echo " " . colorize($displayText, 'gray');
                                     }
                                     echo "\n";
+                                    
+                                    // Отправляем в webhook без senderName
+                                    sendToWebhook($s, $message, null);
                                 }
-
-                                sendToWebhook($s, $message, $senderName);
                             }
                         }
                     }
@@ -310,6 +303,12 @@ while (true) {
                 echo colorize("⚠️  [{$s['session_name']}]: {$e->getMessage()}\n", 'yellow');
             }
         }
+    }
+
+    // Периодическая очистка памяти
+    $iteration++;
+    if ($iteration % 1000 === 0) {
+        gc_collect_cycles();
     }
 
     usleep(100000); // 0.1 сек

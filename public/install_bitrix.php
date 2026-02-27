@@ -153,8 +153,8 @@ CRest::call(
 );
 
 // URL обработчика вебхуков
-$handlerUrl = 'https://bitrix-connector.lead-space.ru/connector_max/Bitrix2.0/public/webhook.php'; 
-$registrationUrl = 'https://bitrix-connector.lead-space.ru/connector_max/Bitrix2.0/public/activate.php';
+$handlerUrl = 'https://bitrix-connector.lead-space.ru/ConnectorHub/public/webhook.php'; 
+$registrationUrl = 'https://bitrix-connector.lead-space.ru/ConnectorHub/public/activate.php';
 if($_REQUEST['DOMAIN']){
     
 }else{
