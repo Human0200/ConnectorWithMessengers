@@ -338,7 +338,7 @@ class WebhookController
 
             // ── Ответ через Max API (профильный токен) ────────────
             if ($messengerType === 'max') {
-                $maxToken = $this->getMaxTokenByChatId($chatId);
+                $maxToken = $this->getMaxTokenByChatId($chatId, $domain);
 
                 if ($maxToken) {
                     // Профильный бот — отправляем напрямую через токен из профиля
@@ -597,6 +597,9 @@ class WebhookController
             $this->chatRepository->saveConnection('max', $chatId, $domain, $connectorId, $userName, $userId);
             $messenger->sendMessage($chatId, "✅ <b>Соединение установлено!</b>\n\n🌐 <b>Домен:</b> $domain\nТеперь ваши сообщения будут отправляться в Bitrix24.");
         }
+
+        // Заполняем profile_id в messenger_chat_connections если ещё не заполнен
+        $this->fillMaxProfileIdForChat($chatId, $domain);
 
         return $this->processMessengerMessage($domain, 'max', $chatId, $messenger, $userName, $normalizedMessage);
     }
@@ -932,10 +935,14 @@ class WebhookController
 
     /**
      * Получить токен Max профиля по chat_id.
-     * Берём profile_id из messenger_chat_connections, потом token из user_messenger_profiles.
+     *
+     * Шаг 1: ищем через messenger_chat_connections.profile_id (чат уже был).
+     * Шаг 2 (fallback): если чата нет — берём первый активный max-профиль
+     *   привязанный к домену через profile_bitrix_connections.
      */
-    private function getMaxTokenByChatId(string $chatId): ?string
+    private function getMaxTokenByChatId(string $chatId, string $domain = ''): ?string
     {
+        // Шаг 1: по chat_id через messenger_chat_connections
         $stmt = $this->profileRepository->getPdo()->prepare("
             SELECT ump.token
             FROM messenger_chat_connections mcc
@@ -948,7 +955,31 @@ class WebhookController
         ");
         $stmt->execute([$chatId]);
         $row = $stmt->fetch(\PDO::FETCH_ASSOC);
-        return $row['token'] ?? null;
+
+        if (!empty($row['token'])) {
+            return $row['token'];
+        }
+
+        // Шаг 2 (fallback): по домену через profile_bitrix_connections
+        if (empty($domain)) {
+            return null;
+        }
+
+        $stmt2 = $this->profileRepository->getPdo()->prepare("
+            SELECT ump.token
+            FROM profile_bitrix_connections pbc
+            JOIN user_messenger_profiles ump ON ump.id = pbc.profile_id
+            WHERE pbc.domain         = ?
+              AND ump.messenger_type = 'max'
+              AND ump.is_active      = 1
+              AND pbc.is_active      = 1
+            ORDER BY pbc.id DESC
+            LIMIT 1
+        ");
+        $stmt2->execute([$domain]);
+        $row2 = $stmt2->fetch(\PDO::FETCH_ASSOC);
+
+        return $row2['token'] ?? null;
     }
 
     /**
@@ -980,6 +1011,34 @@ class WebhookController
         }
 
         return ['success' => $httpCode === 200, 'response' => json_decode($response, true)];
+    }
+
+    /**
+     * Заполнить profile_id в messenger_chat_connections для max чата.
+     * Ищет профиль через profile_bitrix_connections по домену.
+     * Вызывается при каждом входящем сообщении — UPDATE выполнится только если profile_id IS NULL.
+     */
+    private function fillMaxProfileIdForChat(string $chatId, string $domain): void
+    {
+        try {
+            $stmt = $this->profileRepository->getPdo()->prepare("
+                UPDATE messenger_chat_connections mcc
+                JOIN profile_bitrix_connections pbc ON pbc.domain = mcc.domain
+                JOIN user_messenger_profiles ump ON ump.id = pbc.profile_id
+                SET mcc.profile_id = ump.id
+                WHERE mcc.messenger_type    = 'max'
+                  AND mcc.messenger_chat_id = ?
+                  AND mcc.domain            = ?
+                  AND mcc.profile_id        IS NULL
+                  AND ump.messenger_type    = 'max'
+                  AND ump.is_active         = 1
+                  AND pbc.is_active         = 1
+                LIMIT 1
+            ");
+            $stmt->execute([$chatId, $domain]);
+        } catch (\Throwable $e) {
+            $this->logger->error('fillMaxProfileIdForChat failed', ['error' => $e->getMessage()]);
+        }
     }
 
     private function getMaxUserIdForChat(string $chatId, string $domain): ?string

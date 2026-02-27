@@ -28,7 +28,8 @@ try {
         $bitrixService,
         $tokenRepository,
         $logger,
-        $config
+        $config,
+        $pdo
     );
 
     // Проверяем тип запроса

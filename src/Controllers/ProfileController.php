@@ -307,7 +307,13 @@ class ProfileController
         }
 
         $connectorId = $this->tokenRepository->getConnectorId($domain, $profile['messenger_type']);
-
+        $this->logger->info('Connecting profile to domain', [
+            'user_id'        => $user['id'],
+            'profile_id'     => $profileId,
+            'domain'         => $domain,
+            'connector_id'   => $connectorId,
+            'openline_id'    => $openlineId,
+        ]);
         $this->profileRepository->saveConnection(
             $user['id'],
             $profileId,

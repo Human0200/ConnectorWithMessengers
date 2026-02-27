@@ -129,14 +129,18 @@ class InstallController
         // 5. Сохраняем user_id в bitrix_integration_tokens
         $this->saveUserIdToToken($domain, $connectorId, $userId);
 
+        // 6. ← ДОБАВЛЕНО: привязываем все активные профили пользователя к домену
+        $linked = $this->linkProfilesToDomain($userId, $domain, $connectorId, $lineId);
+
         $this->logger->info('Connector activated', [
-            'connector_id' => $connectorId,
-            'line_id'      => $lineId,
-            'user_id'      => $userId,
-            'domain'       => $domain,
+            'connector_id'    => $connectorId,
+            'line_id'         => $lineId,
+            'user_id'         => $userId,
+            'domain'          => $domain,
+            'profiles_linked' => $linked,
         ]);
 
-        $this->renderActivateSuccess($connectorId, $lineId, $userId);
+        $this->renderActivateSuccess($connectorId, $lineId, $userId, $linked);
     }
 
     public function uninstall(array $data): void
@@ -153,6 +157,78 @@ class InstallController
     // ──────────────────────────────────────────────────────────
     //  Private helpers
     // ──────────────────────────────────────────────────────────
+
+    /**
+     * ← ДОБАВЛЕНО
+     * Привязать все активные профили пользователя к домену через profile_bitrix_connections.
+     *
+     * Связывает профили типов max, telegram_bot (у которых есть токен).
+     * Если запись уже существует — обновляет connector_id и openline_id.
+     * Возвращает количество привязанных профилей.
+     */
+    private function linkProfilesToDomain(int $userId, string $domain, string $connectorId, int $lineId): int
+    {
+        try {
+            // Берём все активные профили пользователя с токеном
+            $stmt = $this->pdo->prepare("
+                SELECT id, messenger_type
+                FROM user_messenger_profiles
+                WHERE user_id       = ?
+                  AND is_active     = 1
+                  AND token         IS NOT NULL
+                  AND token         != ''
+                  AND messenger_type IN ('max', 'telegram_bot')
+            ");
+            $stmt->execute([$userId]);
+            $profiles = $stmt->fetchAll(\PDO::FETCH_ASSOC);
+
+            if (empty($profiles)) {
+                $this->logger->info('linkProfilesToDomain: no active profiles found', [
+                    'user_id' => $userId,
+                ]);
+                return 0;
+            }
+
+            // INSERT ... ON DUPLICATE KEY UPDATE — работает если есть UNIQUE(profile_id, domain)
+            $upsert = $this->pdo->prepare("
+                INSERT INTO profile_bitrix_connections
+                    (user_id, profile_id, domain, connector_id, openline_id, is_active)
+                VALUES
+                    (:user_id, :profile_id, :domain, :connector_id, :openline_id, 1)
+                ON DUPLICATE KEY UPDATE
+                    connector_id = VALUES(connector_id),
+                    openline_id  = VALUES(openline_id),
+                    is_active    = 1,
+                    updated_at   = CURRENT_TIMESTAMP
+            ");
+
+            $count = 0;
+            foreach ($profiles as $profile) {
+                $upsert->execute([
+                    ':user_id'      => $userId,
+                    ':profile_id'   => (int)$profile['id'],
+                    ':domain'       => $domain,
+                    ':connector_id' => $connectorId,
+                    ':openline_id'  => $lineId ?: null,
+                ]);
+                $count++;
+
+                $this->logger->info('Profile linked to domain', [
+                    'profile_id'     => $profile['id'],
+                    'messenger_type' => $profile['messenger_type'],
+                    'domain'         => $domain,
+                    'connector_id'   => $connectorId,
+                    'openline_id'    => $lineId,
+                ]);
+            }
+
+            return $count;
+
+        } catch (\Throwable $e) {
+            $this->logger->logException($e, 'linkProfilesToDomain failed');
+            return 0;
+        }
+    }
 
     /**
      * Найти user_id по api_token из таблицы users.
@@ -174,7 +250,6 @@ class InstallController
 
     /**
      * Записать user_id в таблицу bitrix_integration_tokens.
-     * Обновляем по domain + connector_id.
      */
     private function saveUserIdToToken(string $domain, string $connectorId, int $userId): void
     {
@@ -275,8 +350,13 @@ HTML;
 HTML;
     }
 
-    private function renderActivateSuccess(string $connectorId, int $lineId, int $userId): void
+    // ← ИЗМЕНЕНО: добавлен параметр $profilesLinked
+    private function renderActivateSuccess(string $connectorId, int $lineId, int $userId, int $profilesLinked = 0): void
     {
+        $profilesNote = $profilesLinked > 0
+            ? "<div class=\"row\"><strong>Профилей привязано:</strong> {$profilesLinked}</div>"
+            : "<div class=\"row\" style=\"color:#d97706\"><strong>⚠️ Профили не найдены</strong> — создайте профили в личном кабинете</div>";
+
         echo <<<HTML
 <style>
     .success-card {
@@ -296,6 +376,7 @@ HTML;
     <div class="row"><strong>Открытая линия:</strong> #{$lineId}</div>
     <div class="row"><strong>Коннектор:</strong> {$connectorId}</div>
     <div class="row"><strong>Пользователь ConnectHub:</strong> #{$userId}</div>
+    {$profilesNote}
     <div class="note">💡 Все профили этого аккаунта будут получать сообщения через данный коннектор.</div>
 </div>
 HTML;

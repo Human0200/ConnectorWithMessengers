@@ -533,6 +533,7 @@ async function submitNew(){
   if(['max','telegram_bot'].includes(type)&&!token){G('npTokenE').textContent='Токен обязателен';G('npTokenE').style.display='block';return;}
   try{
     const r=await api('/profiles','POST',{messenger_type:type,name,token:token||null});
+    console.log();
     if(r.success){toast('Профиль создан!','ok');closeM('mNew');loadProfiles();}
     else toast(r.errors?.general||r.errors?.token||r.error||'Ошибка','err');
   }catch{toast('Ошибка соединения','err');}
