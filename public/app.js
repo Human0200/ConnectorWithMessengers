@@ -153,7 +153,7 @@ function sessionBadge(sess) {
 
 function openQR(sessionId, e) {
   if (e) e.stopPropagation();
-  window.open(`/public/telegram/qr_auth.php?session_id=${encodeURIComponent(sessionId)}`, '_blank', 'width=520,height=700');
+  window.open(`telegram/qr_auth.php?session_id=${encodeURIComponent(sessionId)}`, '_blank', 'width=520,height=700');
   setTimeout(loadProfiles, 5000);
   setTimeout(loadProfiles, 15000);
   setTimeout(loadProfiles, 30000);

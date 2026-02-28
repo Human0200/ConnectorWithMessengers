@@ -354,7 +354,7 @@ body{min-height:100vh;display:flex;align-items:center;justify-content:center;pad
     <!-- Загрузка -->
     <div class="state on" id="stLoading">
       <div class="spinner"></div>
-      <p style="color:var(--muted);font-size:13px">Инициализация MadelineProto...</p>
+      <p style="color:var(--muted);font-size:13px">Инициализация...</p>
     </div>
 
     <!-- QR -->

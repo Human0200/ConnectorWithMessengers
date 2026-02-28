@@ -350,6 +350,9 @@ a {
     padding: 6px 12px;
     font-size: 12px;
     border-radius: 7px;
+    max-width: unset;
+    min-height: unset;
+    margin-top: unset;
 }
 
 .btn-xs {
