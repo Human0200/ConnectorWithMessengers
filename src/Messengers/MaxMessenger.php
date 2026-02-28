@@ -10,41 +10,41 @@ use BitrixTelegram\Helpers\Logger;
 
 class MaxMessenger implements MessengerInterface
 {
-    private TokenRepository $tokenRepository;
-    private Logger $logger;
     private ?string $currentDomain = null;
-    private MaxService $maxService;
-
-    public function __construct(
-        TokenRepository $tokenRepository,
-        Logger $logger,
-        MaxService $maxService
-    ) {
-        $this->tokenRepository = $tokenRepository;
-        $this->logger = $logger;
-        $this->maxService = $maxService;
-    }
 
     /**
-     * Установить домен для текущей операции
+     * Токен, установленный напрямую (из user_messenger_profiles.token).
+     * Приоритет над поиском токена по домену в bitrix_integration_tokens.
      */
+    private ?string $explicitToken = null;
+
+    public function __construct(
+        private TokenRepository $tokenRepository,
+        private Logger $logger,
+        private MaxService $maxService
+    ) {}
+
     public function setDomain(string $domain): void
     {
         $this->currentDomain = $domain;
         $this->logger->debug('Domain set for MaxMessenger', ['domain' => $domain]);
     }
 
-    /**
-     * Получить текущий домен
-     */
     public function getDomain(): ?string
     {
         return $this->currentDomain;
     }
 
     /**
-     * Проверить установлен ли домен
+     * Установить токен напрямую из профиля.
+     * Когда установлен — MaxService использует его, не ища в БД по домену.
      */
+    public function setToken(string $token): void
+    {
+        $this->explicitToken = $token;
+        $this->logger->debug('Explicit token set for MaxMessenger');
+    }
+
     private function checkDomain(): bool
     {
         if (!$this->currentDomain) {
@@ -60,13 +60,14 @@ class MaxMessenger implements MessengerInterface
             return ['ok' => false, 'error' => 'Domain not set'];
         }
 
-        $result = $this->maxService->sendMessage($chatId, $text, $this->currentDomain);
+        $result = $this->explicitToken
+            ? $this->maxService->sendMessageWithToken($chatId, $text, $this->explicitToken)
+            : $this->maxService->sendMessage($chatId, $text, $this->currentDomain);
 
-        // Приводим к единому формату ответа
         return [
-            'ok' => $result['success'] ?? false,
+            'ok'     => $result['success'] ?? false,
             'result' => $result['data'] ?? null,
-            'error' => $result['error'] ?? null,
+            'error'  => $result['error'] ?? null,
         ];
     }
 
@@ -76,18 +77,14 @@ class MaxMessenger implements MessengerInterface
             return ['ok' => false, 'error' => 'Domain not set'];
         }
 
-        // Для URL используем sendImage
-        if (filter_var($photoUrl, FILTER_VALIDATE_URL)) {
-            $result = $this->maxService->sendImage($chatId, $photoUrl, $caption, $this->currentDomain);
-        } else {
-            // Для локальных файлов используем sendFile
-            $result = $this->maxService->sendFile($chatId, $photoUrl, $caption, $this->currentDomain);
-        }
+        $result = $this->explicitToken
+            ? $this->maxService->sendImageWithToken($chatId, $photoUrl, $caption, $this->explicitToken)
+            : $this->maxService->sendImage($chatId, $photoUrl, $caption, $this->currentDomain);
 
         return [
-            'ok' => $result['success'] ?? false,
+            'ok'     => $result['success'] ?? false,
             'result' => $result['data'] ?? null,
-            'error' => $result['error'] ?? null,
+            'error'  => $result['error'] ?? null,
         ];
     }
 
@@ -96,20 +93,17 @@ class MaxMessenger implements MessengerInterface
         if (!$this->checkDomain()) {
             return ['ok' => false, 'error' => 'Domain not set'];
         }
+
         $originalName = $fileData['name'] ?? null;
 
-        $result = $this->maxService->sendFile(
-            $chatId,
-            $documentUrl,
-            $caption,
-            $this->currentDomain,
-            $originalName
-        );
+        $result = $this->explicitToken
+            ? $this->maxService->sendFileWithToken($chatId, $documentUrl, $caption, $this->explicitToken, $originalName)
+            : $this->maxService->sendFile($chatId, $documentUrl, $caption, $this->currentDomain, $originalName);
 
         return [
-            'ok' => $result['success'] ?? false,
+            'ok'     => $result['success'] ?? false,
             'result' => $result['data'] ?? null,
-            'error' => $result['error'] ?? null,
+            'error'  => $result['error'] ?? null,
         ];
     }
 
@@ -119,12 +113,14 @@ class MaxMessenger implements MessengerInterface
             return ['ok' => false, 'error' => 'Domain not set'];
         }
 
-        $result = $this->maxService->sendAudio($chatId, $voiceUrl, $this->currentDomain);
+        $result = $this->explicitToken
+            ? $this->maxService->sendAudioWithToken($chatId, $voiceUrl, $this->explicitToken)
+            : $this->maxService->sendAudio($chatId, $voiceUrl, $this->currentDomain);
 
         return [
-            'ok' => $result['success'] ?? false,
+            'ok'     => $result['success'] ?? false,
             'result' => $result['data'] ?? null,
-            'error' => $result['error'] ?? null,
+            'error'  => $result['error'] ?? null,
         ];
     }
 
@@ -134,23 +130,21 @@ class MaxMessenger implements MessengerInterface
             return ['ok' => false, 'error' => 'Domain not set'];
         }
 
-        $result = $this->maxService->sendVideo($chatId, $videoUrl, $caption, $this->currentDomain);
+        $result = $this->explicitToken
+            ? $this->maxService->sendVideoWithToken($chatId, $videoUrl, $caption, $this->explicitToken)
+            : $this->maxService->sendVideo($chatId, $videoUrl, $caption, $this->currentDomain);
 
         return [
-            'ok' => $result['success'] ?? false,
+            'ok'     => $result['success'] ?? false,
             'result' => $result['data'] ?? null,
-            'error' => $result['error'] ?? null,
+            'error'  => $result['error'] ?? null,
         ];
     }
 
     public function getFile(string $fileId): ?array
     {
-        if (!$this->checkDomain()) {
-            return null;
-        }
-
-        $result = $this->maxService->getFile($fileId, $this->currentDomain);
-        return $result;
+        if (!$this->checkDomain()) return null;
+        return $this->maxService->getFile($fileId, $this->currentDomain);
     }
 
     public function getFileUrl(string $filePath): string
@@ -163,13 +157,11 @@ class MaxMessenger implements MessengerInterface
         if (!$this->checkDomain()) {
             return ['ok' => false, 'error' => 'Domain not set'];
         }
-
         $result = $this->maxService->setWebhook($webhookUrl, $this->currentDomain);
-
         return [
-            'ok' => $result['success'] ?? false,
+            'ok'     => $result['success'] ?? false,
             'result' => $result['data'] ?? null,
-            'error' => $result['error'] ?? null,
+            'error'  => $result['error'] ?? null,
         ];
     }
 
@@ -178,103 +170,62 @@ class MaxMessenger implements MessengerInterface
         if (!$this->checkDomain()) {
             return ['ok' => false, 'error' => 'Domain not set'];
         }
-
-        // Используем getWebhookInfo или getUserInfo в зависимости от потребностей
         $result = $this->maxService->getWebhookInfo($this->currentDomain);
-
         if (!$result['success']) {
-            // Если не удалось получить информацию о вебхуке, пробуем получить информацию о пользователе
             $result = $this->maxService->getUserInfo('me', $this->currentDomain);
         }
-
         return [
-            'ok' => $result['success'] ?? false,
+            'ok'     => $result['success'] ?? false,
             'result' => $result['data'] ?? null,
-            'error' => $result['error'] ?? null,
+            'error'  => $result['error'] ?? null,
         ];
     }
 
     public function normalizeIncomingMessage(array $message): array
     {
-        // Проверяем структуру сообщения
-        if (isset($message['message'])) {
-            $rawMessage = $message['message'];
-        } else {
-            $rawMessage = $message;
-        }
+        $rawMessage = $message['message'] ?? $message;
 
         $normalized = [
-            'message_id' => null,
-            'chat_id' => null,
-            'user_id' => null,
-            'user_name' => '',
-            'text' => null,
-            'timestamp' => null,
-            'files' => [],
+            'message_id'   => null,
+            'chat_id'      => null,
+            'user_id'      => null,
+            'user_name'    => '',
+            'text'         => null,
+            'timestamp'    => null,
+            'files'        => [],
             'message_type' => 'text',
-            'reply_to' => null,
-            'raw' => $rawMessage
+            'reply_to'     => null,
+            'raw'          => $rawMessage,
         ];
 
         try {
-            // ИЗВЛЕКАЕМ chat_id - В Max это recipient.chat_id
             if (isset($rawMessage['recipient']['chat_id'])) {
                 $normalized['chat_id'] = (string) $rawMessage['recipient']['chat_id'];
             }
 
-            // Извлекаем user_id - ID отправителя
             if (isset($rawMessage['sender']['user_id'])) {
                 $normalized['user_id'] = (string) $rawMessage['sender']['user_id'];
             }
 
-            // Формируем имя пользователя
-            $userNameParts = [];
-            if (isset($rawMessage['sender']['first_name'])) {
-                $userNameParts[] = $rawMessage['sender']['first_name'];
-            }
-            if (isset($rawMessage['sender']['last_name'])) {
-                $userNameParts[] = $rawMessage['sender']['last_name'];
-            }
+            $userNameParts = array_filter([
+                $rawMessage['sender']['first_name'] ?? '',
+                $rawMessage['sender']['last_name'] ?? '',
+            ]);
+            $normalized['user_name'] = !empty($userNameParts)
+                ? implode(' ', $userNameParts)
+                : ($rawMessage['sender']['name'] ?? 'User');
 
-            if (!empty($userNameParts)) {
-                $normalized['user_name'] = implode(' ', array_filter($userNameParts));
-            } elseif (isset($rawMessage['sender']['name'])) {
-                $normalized['user_name'] = $rawMessage['sender']['name'];
-            } else {
-                $normalized['user_name'] = 'User';
-            }
+            $normalized['text']       = $rawMessage['body']['text'] ?? null;
+            $normalized['message_id'] = $rawMessage['body']['mid'] ?? null;
+            $normalized['timestamp']  = (int) ($rawMessage['timestamp'] ?? $message['timestamp'] ?? time());
 
-            // Извлекаем текст сообщения
-            if (isset($rawMessage['body']['text'])) {
-                $normalized['text'] = $rawMessage['body']['text'];
-            }
-
-            // Извлекаем message_id
-            if (isset($rawMessage['body']['mid'])) {
-                $normalized['message_id'] = $rawMessage['body']['mid'];
-            }
-
-            // Извлекаем timestamp
-            if (isset($rawMessage['timestamp'])) {
-                $normalized['timestamp'] = (int) $rawMessage['timestamp'];
-            } elseif (isset($message['timestamp'])) {
-                $normalized['timestamp'] = (int) $message['timestamp'];
-            }
-
-            // Проверяем наличие файлов в attachments
-            if (
-                isset($rawMessage['body']['attachments']) &&
-                is_array($rawMessage['body']['attachments'])
-            ) {
-                foreach ($rawMessage['body']['attachments'] as $attachment) {
-                    $fileInfo = $this->normalizeAttachment($attachment);
-                    if ($fileInfo) {
-                        $normalized['files'][] = $fileInfo;
-                    }
+            foreach ($rawMessage['body']['attachments'] ?? [] as $attachment) {
+                $fileInfo = $this->normalizeAttachment($attachment);
+                if ($fileInfo) {
+                    $normalized['files'][] = $fileInfo;
                 }
             }
 
-            // Определяем тип сообщения
             $normalized['message_type'] = $this->detectMessageType($normalized);
         } catch (\Exception $e) {
             $this->logger->error('Error normalizing Max message: ' . $e->getMessage());
@@ -286,143 +237,88 @@ class MaxMessenger implements MessengerInterface
     private function detectMessageType(array $normalized): string
     {
         if (!empty($normalized['files'])) {
-            $firstFile = $normalized['files'][0];
-            return $firstFile['type'] ?? 'file';
+            return $normalized['files'][0]['type'] ?? 'file';
         }
-
         return !empty($normalized['text']) ? 'text' : 'unknown';
     }
 
-    /**
-     * Нормализация вложения Max messenger
-     */
     private function normalizeAttachment(array $attachment): ?array
     {
-        if (!isset($attachment['type'])) {
-            return null;
-        }
+        if (!isset($attachment['type'])) return null;
 
+        $payload  = $attachment['payload'] ?? [];
         $fileInfo = [
-            'id' => null,
-            'type' => $attachment['type'],
-            'url' => null,
+            'id'        => null,
+            'type'      => $attachment['type'],
+            'url'       => null,
             'mime_type' => null,
-            'size' => null,
-            'name' => null,
+            'size'      => null,
+            'name'      => null,
         ];
 
-        try {
-            switch ($attachment['type']) {
-                case 'image':
-                    if (isset($attachment['payload']['url'])) {
-                        $fileInfo['url'] = $attachment['payload']['url'];
-                        if (isset($attachment['payload']['photo_id'])) {
-                            $fileInfo['id'] = (string) $attachment['payload']['photo_id'];
-                        }
-                        $extension = $this->getImageExtensionFromUrl($fileInfo['url']);
-                        $fileInfo['name'] = 'image_' . time() . '.' . $extension;
-                        $fileInfo['file_name'] = $fileInfo['name'];
-                    }
-                    break;
-
-                case 'video':
-                    if (isset($attachment['payload']['url'])) {
-                        $fileInfo['url'] = $attachment['payload']['url'];
-                        $fileInfo['name'] = 'video_' . time() . '.mp4';
-                        $fileInfo['file_name'] = $fileInfo['name'];
-                    }
-                    break;
-
-                case 'audio':
-                    if (isset($attachment['payload']['url'])) {
-                        $fileInfo['url'] = $attachment['payload']['url'];
-                        $fileInfo['name'] = 'audio_' . time() . '.mp3';
-                        $fileInfo['file_name'] = $fileInfo['name'];
-                    }
-                    break;
-
-                case 'file':
-                    if (isset($attachment['payload']['url'])) {
-                        $fileInfo['url'] = $attachment['payload']['url'];
-                        if (isset($attachment['payload']['filename'])) {
-                            $fileInfo['name'] = $attachment['payload']['filename'];
-                            $fileInfo['file_name'] = $fileInfo['name'];
-                        } else {
-                            $fileInfo['name'] = 'file_' . time();
-                            $fileInfo['file_name'] = $fileInfo['name'];
-                        }
-                    }
-                    break;
-            }
-        } catch (\Exception $e) {
-            $this->logger->error('Error normalizing Max attachment: ' . $e->getMessage());
-            return null;
+        switch ($attachment['type']) {
+            case 'image':
+                $fileInfo['url']       = $payload['url'] ?? null;
+                $fileInfo['id']        = isset($payload['photo_id']) ? (string) $payload['photo_id'] : null;
+                $ext                   = $this->getImageExtensionFromUrl($fileInfo['url'] ?? '');
+                $fileInfo['name']      = 'image_' . time() . '.' . $ext;
+                $fileInfo['file_name'] = $fileInfo['name'];
+                break;
+            case 'video':
+                $fileInfo['url']       = $payload['url'] ?? null;
+                $fileInfo['name']      = 'video_' . time() . '.mp4';
+                $fileInfo['file_name'] = $fileInfo['name'];
+                break;
+            case 'audio':
+                $fileInfo['url']       = $payload['url'] ?? null;
+                $fileInfo['name']      = 'audio_' . time() . '.mp3';
+                $fileInfo['file_name'] = $fileInfo['name'];
+                break;
+            case 'file':
+                $fileInfo['url']       = $payload['url'] ?? null;
+                $fileInfo['name']      = $payload['filename'] ?? ('file_' . time());
+                $fileInfo['file_name'] = $fileInfo['name'];
+                break;
         }
 
         return !empty($fileInfo['url']) ? $fileInfo : null;
     }
 
-    /**
-     * Получить расширение изображения из URL
-     */
     private function getImageExtensionFromUrl(string $url): string
     {
-        $parsed = parse_url($url);
-        $path = $parsed['path'] ?? '';
-
-        $extension = pathinfo($path, PATHINFO_EXTENSION);
-
-        if (!empty($extension) && in_array(strtolower($extension), ['jpg', 'jpeg', 'png', 'gif', 'webp'])) {
-            return strtolower($extension);
+        $path = parse_url($url, PHP_URL_PATH) ?? '';
+        $ext  = strtolower(pathinfo($path, PATHINFO_EXTENSION));
+        if (in_array($ext, ['jpg', 'jpeg', 'png', 'gif', 'webp'], true)) {
+            return $ext;
         }
-
-        parse_str($parsed['query'] ?? '', $query);
-
-        if (isset($query['ext'])) {
-            return strtolower($query['ext']);
-        }
-
-        return 'jpg';
+        parse_str(parse_url($url, PHP_URL_QUERY) ?? '', $query);
+        return isset($query['ext']) ? strtolower($query['ext']) : 'jpg';
     }
 
     public function denormalizeOutgoingMessage(array $message): array
     {
-        // Конвертируем универсальный формат в формат Max
-        $result = [
-            'user_id' => $message['chat_id'] ?? '',
-        ];
-
+        $result = ['user_id' => $message['chat_id'] ?? ''];
         if (!empty($message['text'])) {
             $result['text'] = $message['text'];
         }
-
         if (!empty($message['files'])) {
             $file = $message['files'][0];
-            $result['attachments'] = [
-                [
-                    'type' => $this->mapToMaxFileType($file['type'] ?? 'document'),
-                    'payload' => [
-                        'url' => $file['url'] ?? ''
-                    ]
-                ]
-            ];
+            $result['attachments'] = [[
+                'type'    => $this->mapToMaxFileType($file['type'] ?? 'document'),
+                'payload' => ['url' => $file['url'] ?? ''],
+            ]];
         }
-
         return $result;
     }
 
     private function mapToMaxFileType(string $type): string
     {
-        $mapping = [
-            'photo' => 'image',
-            'image' => 'image',
-            'document' => 'file',
-            'voice' => 'audio',
-            'audio' => 'audio',
-            'video' => 'video',
-        ];
-
-        return $mapping[strtolower($type)] ?? 'file';
+        return match (strtolower($type)) {
+            'photo', 'image' => 'image',
+            'voice', 'audio' => 'audio',
+            'video'          => 'video',
+            default          => 'file',
+        };
     }
 
     public function getType(): string
@@ -430,15 +326,10 @@ class MaxMessenger implements MessengerInterface
         return 'max';
     }
 
-    /**
-     * Проверить подключение к API
-     */
     public function checkConnection(): bool
     {
-        if (!$this->currentDomain) {
-            return false;
-        }
-
-        return $this->maxService->checkConnection($this->currentDomain);
+        return $this->currentDomain
+            ? $this->maxService->checkConnection($this->currentDomain)
+            : false;
     }
 }
