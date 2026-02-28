@@ -159,14 +159,28 @@ function openQR(sessionId, e) {
   setTimeout(loadProfiles, 30000);
 }
 
+// ─── NEW PROFILE MODAL ────────────────────────────────────────
+
 function openNewProfile() {
+  // Сбрасываем скрытый input типа
   G('npType').value = '';
+  // Снимаем выделение с карточек мессенджеров
+  document.querySelectorAll('.mp-card').forEach(c => c.classList.remove('selected'));
+  // Сбрасываем остальные поля
   G('npName').value = '';
   G('npToken').value = '';
   G('npHint').style.display = 'none';
   G('npTokenF').style.display = 'none';
   G('npTokenE').style.display = 'none';
   openM('mNew');
+}
+
+// Вызывается при клике на карточку мессенджера
+function pickMessenger(type, el) {
+  document.querySelectorAll('.mp-card').forEach(c => c.classList.remove('selected'));
+  el.classList.add('selected');
+  G('npType').value = type;
+  onTypeChange();
 }
 
 function onTypeChange() {
