@@ -67,61 +67,61 @@ class MaxService
     /**
      * Загрузить файл (локальный или по URL)
      */
-    public function uploadFile(string $filePath, string $type, string $domain, ?string $originalName = null): ?string
-    {
-        // Определяем, это URL или локальный путь
-        $isUrl = filter_var($filePath, FILTER_VALIDATE_URL);
+public function uploadFile(string $filePath, string $type, string $domain, ?string $originalName = null): ?string
+{
+    // Определяем, это URL или локальный путь
+    $isUrl = filter_var($filePath, FILTER_VALIDATE_URL);
+    
+    // Сохраняем оригинальное имя файла если оно пришло из URL
+    $urlOriginalName = $originalName;
 
-        // Сохраняем оригинальное имя файла если оно пришло из URL
-        $urlOriginalName = $originalName;
+    // Получаем URL для загрузки
+    $uploadUrlResponse = $this->makeRequest("uploads?type={$type}", [], $domain, 'POST');
 
-        // Получаем URL для загрузки
-        $uploadUrlResponse = $this->makeRequest("uploads?type={$type}", [], $domain, 'POST');
-
-        if (!$uploadUrlResponse['success'] || empty($uploadUrlResponse['data']['url'])) {
-            $this->logger->error('Failed to get upload URL', [
-                'type' => $type,
-                'response' => $uploadUrlResponse,
-                'domain' => $domain,
-            ]);
-            return null;
-        }
-
-        $uploadUrl = $uploadUrlResponse['data']['url'];
-
-        // Если это URL, сначала скачиваем файл
-        if ($isUrl) {
-            $tempFile = $this->downloadFileFromUrl($filePath);
-            if (!$tempFile) {
-                $this->logger->error('Failed to download file from URL', ['url' => $filePath]);
-                return null;
-            }
-
-            $filePath = $tempFile;
-            $isTempFile = true;
-        } else {
-            $isTempFile = false;
-        }
-
-        // Проверяем существование локального файла
-        if (!file_exists($filePath)) {
-            $this->logger->error('File not found', ['path' => $filePath]);
-            if ($isTempFile) {
-                @unlink($filePath);
-            }
-            return null;
-        }
-
-        // Загружаем файл на полученный URL, передаем оригинальное имя
-        $token = $this->uploadToUrl($uploadUrl, $filePath, $type, $domain, $urlOriginalName);
-
-        // Удаляем временный файл если был создан
-        if ($isTempFile && file_exists($filePath)) {
-            unlink($filePath);
-        }
-
-        return $token;
+    if (!$uploadUrlResponse['success'] || empty($uploadUrlResponse['data']['url'])) {
+        $this->logger->error('Failed to get upload URL', [
+            'type' => $type,
+            'response' => $uploadUrlResponse,
+            'domain' => $domain,
+        ]);
+        return null;
     }
+
+    $uploadUrl = $uploadUrlResponse['data']['url'];
+
+    // Если это URL, сначала скачиваем файл
+    if ($isUrl) {
+        $tempFile = $this->downloadFileFromUrl($filePath);
+        if (!$tempFile) {
+            $this->logger->error('Failed to download file from URL', ['url' => $filePath]);
+            return null;
+        }
+        
+        $filePath = $tempFile;
+        $isTempFile = true;
+    } else {
+        $isTempFile = false;
+    }
+
+    // Проверяем существование локального файла
+    if (!file_exists($filePath)) {
+        $this->logger->error('File not found', ['path' => $filePath]);
+        if ($isTempFile) {
+            @unlink($filePath);
+        }
+        return null;
+    }
+
+    // Загружаем файл на полученный URL, передаем оригинальное имя
+    $token = $this->uploadToUrl($uploadUrl, $filePath, $type, $domain, $urlOriginalName);
+
+    // Удаляем временный файл если был создан
+    if ($isTempFile && file_exists($filePath)) {
+        unlink($filePath);
+    }
+
+    return $token;
+}
 
     /**
      * Скачать файл по URL во временный файл
@@ -206,112 +206,112 @@ class MaxService
     /**
      * Загрузить файл по URL в Max
      */
-    private function uploadToUrl(string $uploadUrl, string $filePath, string $type, string $domain, ?string $originalName = null): ?string
-    {
-        $token = $this->getTokenForDomain($domain);
-
-        if (!file_exists($filePath)) {
-            $this->logger->error('File not found for upload', ['path' => $filePath]);
-            return null;
-        }
-
-
-        $mimeType = mime_content_type($filePath);
+private function uploadToUrl(string $uploadUrl, string $filePath, string $type, string $domain, ?string $originalName = null): ?string
+{
+    $token = $this->getTokenForDomain($domain);
+    
+    if (!file_exists($filePath)) {
+        $this->logger->error('File not found for upload', ['path' => $filePath]);
+        return null;
+    }
 
 
-        $fileName = $originalName ?: basename($filePath);
+    $mimeType = mime_content_type($filePath);
+    
 
+    $fileName = $originalName ?: basename($filePath);
+    
 
-        if (!$fileName || $fileName === $filePath) {
-            $extension = $this->getExtensionFromMimeType($mimeType);
-            $fileName = 'file_' . time() . '.' . $extension;
-        }
+    if (!$fileName || $fileName === $filePath) {
+        $extension = $this->getExtensionFromMimeType($mimeType);
+        $fileName = 'file_' . time() . '.' . $extension;
+    }
+    
+    $ch = curl_init($uploadUrl);
+    
+    $file = curl_file_create($filePath, $mimeType, $fileName);
+    
+    $postData = ['data' => $file];
+    
+    $headers = [
+        'Authorization: ' . $token,
+        'Accept: application/json'
+    ];
 
-        $ch = curl_init($uploadUrl);
+    $options = [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_HTTPHEADER => $headers,
+        CURLOPT_POST => true,
+        CURLOPT_POSTFIELDS => $postData,
+        CURLOPT_TIMEOUT => 300,
+        CURLOPT_SSL_VERIFYPEER => true,
+        CURLOPT_SSL_VERIFYHOST => 2,
+    ];
 
-        $file = curl_file_create($filePath, $mimeType, $fileName);
+    curl_setopt_array($ch, $options);
 
-        $postData = ['data' => $file];
+    $response = curl_exec($ch);
+    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $error = curl_error($ch);
+    curl_close($ch);
 
-        $headers = [
-            'Authorization: ' . $token,
-            'Accept: application/json'
-        ];
-
-        $options = [
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_HTTPHEADER => $headers,
-            CURLOPT_POST => true,
-            CURLOPT_POSTFIELDS => $postData,
-            CURLOPT_TIMEOUT => 300,
-            CURLOPT_SSL_VERIFYPEER => true,
-            CURLOPT_SSL_VERIFYHOST => 2,
-        ];
-
-        curl_setopt_array($ch, $options);
-
-        $response = curl_exec($ch);
-        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        $error = curl_error($ch);
-        curl_close($ch);
-
-        if ($error) {
-            $this->logger->error('File upload curl error', [
-                'url' => $uploadUrl,
-                'error' => $error,
-                'type' => $type,
-                'domain' => $domain,
-            ]);
-            return null;
-        }
-
-        $result = json_decode($response, true);
-
-        $this->logger->debug('Upload response', [
-            'http_code' => $httpCode,
-            'file_name' => $fileName,
-            'mime_type' => $mimeType,
+    if ($error) {
+        $this->logger->error('File upload curl error', [
+            'url' => $uploadUrl,
+            'error' => $error,
             'type' => $type,
+            'domain' => $domain,
         ]);
-
-        $token = $result['token'] ?? null;
-
-        if (!$token) {
-            $this->logger->error('No token in upload response', [
-                'response' => $result,
-                'http_code' => $httpCode,
-                'type' => $type,
-                'domain' => $domain,
-            ]);
-        }
-
-        return $token;
+        return null;
     }
 
-    private function getExtensionFromMimeType(string $mimeType): string
-    {
-        $extensions = [
-            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' => 'xlsx',
-            'application/vnd.ms-excel' => 'xls',
-            'application/vnd.openxmlformats-officedocument.wordprocessingml.document' => 'docx',
-            'application/msword' => 'doc',
-            'application/pdf' => 'pdf',
-            'image/jpeg' => 'jpg',
-            'image/png' => 'png',
-            'image/gif' => 'gif',
-            'image/webp' => 'webp',
-            'application/zip' => 'zip',
-            'application/x-rar-compressed' => 'rar',
-            'text/plain' => 'txt',
-            'text/csv' => 'csv',
-            'audio/mpeg' => 'mp3',
-            'audio/wav' => 'wav',
-            'video/mp4' => 'mp4',
-            'video/avi' => 'avi',
-        ];
+    $result = json_decode($response, true);
+    
+    $this->logger->debug('Upload response', [
+        'http_code' => $httpCode,
+        'file_name' => $fileName,
+        'mime_type' => $mimeType,
+        'type' => $type,
+    ]);
+    
+    $token = $result['token'] ?? null;
 
-        return $extensions[$mimeType] ?? 'bin';
+    if (!$token) {
+        $this->logger->error('No token in upload response', [
+            'response' => $result,
+            'http_code' => $httpCode,
+            'type' => $type,
+            'domain' => $domain,
+        ]);
     }
+
+    return $token;
+}
+
+private function getExtensionFromMimeType(string $mimeType): string
+{
+    $extensions = [
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' => 'xlsx',
+        'application/vnd.ms-excel' => 'xls',
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document' => 'docx',
+        'application/msword' => 'doc',
+        'application/pdf' => 'pdf',
+        'image/jpeg' => 'jpg',
+        'image/png' => 'png',
+        'image/gif' => 'gif',
+        'image/webp' => 'webp',
+        'application/zip' => 'zip',
+        'application/x-rar-compressed' => 'rar',
+        'text/plain' => 'txt',
+        'text/csv' => 'csv',
+        'audio/mpeg' => 'mp3',
+        'audio/wav' => 'wav',
+        'video/mp4' => 'mp4',
+        'video/avi' => 'avi',
+    ];
+    
+    return $extensions[$mimeType] ?? 'bin';
+}
 
     /**
      * Отправка изображения
@@ -336,20 +336,20 @@ class MaxService
     /**
      * Отправка файла с загрузкой
      */
-    public function sendFile(string $userId, string $filePath, ?string $caption = null, string $domain, ?string $originalName = null): array
-    {
-        $token = $this->uploadFile($filePath, 'file', $domain, $originalName);
-
-        if (!$token) {
-            return [
-                'success' => false,
-                'error' => 'Failed to upload file',
-            ];
-        }
-
-        sleep(2);
-        return $this->sendAttachmentWithRetry($userId, 'file', $token, $caption, $domain);
+public function sendFile(string $userId, string $filePath, ?string $caption = null, string $domain, ?string $originalName = null): array
+{
+    $token = $this->uploadFile($filePath, 'file', $domain, $originalName);
+    
+    if (!$token) {
+        return [
+            'success' => false,
+            'error' => 'Failed to upload file',
+        ];
     }
+
+    sleep(2);
+    return $this->sendAttachmentWithRetry($userId, 'file', $token, $caption, $domain);
+}
 
     /**
      * Отправка вложения с повторными попытками при ошибке attachment.not.ready
@@ -524,13 +524,10 @@ class MaxService
      */
     private function makeRequest(string $endpoint, array $data = [], string $domain, string $method = 'POST'): array
     {
-        $baseUrl = rtrim($this->apiUrl, '/');
-        $cleanEndpoint = ltrim($endpoint, '/');
-        $url = $baseUrl . '/' . $cleanEndpoint;
+        $url = $this->apiUrl . '/' . $endpoint;
 
         // Получаем токен для домена
         $token = $this->getTokenForDomain($domain);
-        $token = $this->cleanToken($token);
 
         if (!$token) {
             $this->logger->error('Max API token not found', ['domain' => $domain]);
@@ -544,7 +541,8 @@ class MaxService
 
         $headers = [
             'Content-Type: application/json',
-            'Authorization: ' . trim($token),
+            'Authorization: ' . $token,
+            'Accept: application/json'
         ];
 
         $options = [
@@ -588,13 +586,10 @@ class MaxService
 
         if ($httpCode !== 200) {
             $this->logger->error('Max API error', [
-                'apiUrl' => $this->apiUrl,
-                'method' => $method,
                 'endpoint' => $endpoint,
                 'http_code' => $httpCode,
                 'response' => $response,
                 'domain' => $domain,
-                'token' => $token,
             ]);
 
             return [
@@ -617,17 +612,6 @@ class MaxService
             'http_code' => $httpCode
         ];
     }
-
-    private function cleanToken(string $token): string
-{
-    $token = preg_replace('/[^\x20-\x7E]/', '', $token);
-    
-    $token = trim($token);
-    
-    $token = str_replace(["\xEF\xBB\xBF", "\xFE\xFF", "\xFF\xFE"], '', $token);
-    
-    return $token;
-}
 
     /**
      * Проверить доступность API для домена

@@ -254,4 +254,80 @@ class ChatRepository
     {
         return $this->deactivateConnection('telegram', (string) $telegramChatId);
     }
+    /**
+ * Сохранить profile_id для чата (с проверкой существования колонки)
+ */
+public function updateProfileId(string $messengerType, string $chatId, int $profileId): void
+{
+    try {
+        $stmt = $this->pdo->prepare("
+            UPDATE messenger_chat_connections
+            SET profile_id = ?
+            WHERE messenger_type = ? AND messenger_chat_id = ?
+        ");
+        $stmt->execute([$profileId, $messengerType, $chatId]);
+    } catch (\PDOException $e) {
+        // Если колонка не существует - создаем
+        if ($e->errorInfo[1] == 1054) { // Unknown column
+            $this->pdo->exec("ALTER TABLE messenger_chat_connections ADD COLUMN profile_id INT NULL");
+            
+            // Повторяем UPDATE
+            $stmt = $this->pdo->prepare("
+                UPDATE messenger_chat_connections
+                SET profile_id = ?
+                WHERE messenger_type = ? AND messenger_chat_id = ?
+            ");
+            $stmt->execute([$profileId, $messengerType, $chatId]);
+        } else {
+            throw $e;
+        }
+    }
+}
+
+/**
+ * Получить токен бота по chat_id
+ */
+public function getBotTokenByChatId(string $chatId): ?string
+{
+    $stmt = $this->pdo->prepare("
+        SELECT ump.token
+        FROM messenger_chat_connections mcc
+        JOIN user_messenger_profiles ump ON ump.id = mcc.profile_id
+        WHERE mcc.messenger_type = 'telegram_bot'
+          AND mcc.messenger_chat_id = ?
+          AND mcc.is_active = 1
+          AND ump.is_active = 1
+        LIMIT 1
+    ");
+    $stmt->execute([$chatId]);
+    $row = $stmt->fetch(PDO::FETCH_ASSOC);
+    return $row['token'] ?? null;
+}
+
+/**
+ * Заполнить profile_id для max чата
+ */
+public function fillMaxProfileId(string $chatId, string $domain): void
+{
+    try {
+        $stmt = $this->pdo->prepare("
+            UPDATE messenger_chat_connections mcc
+            JOIN profile_bitrix_connections pbc ON pbc.domain = mcc.domain
+            JOIN user_messenger_profiles ump ON ump.id = pbc.profile_id
+            SET mcc.profile_id = ump.id
+            WHERE mcc.messenger_type = 'max'
+              AND mcc.messenger_chat_id = ?
+              AND mcc.domain = ?
+              AND mcc.profile_id IS NULL
+              AND ump.messenger_type = 'max'
+              AND ump.is_active = 1
+              AND pbc.is_active = 1
+            LIMIT 1
+        ");
+        $stmt->execute([$chatId, $domain]);
+    } catch (\PDOException $e) {
+        // Логируем ошибку, но не прерываем выполнение
+        error_log("fillMaxProfileId failed: " . $e->getMessage());
+    }
+}
 }

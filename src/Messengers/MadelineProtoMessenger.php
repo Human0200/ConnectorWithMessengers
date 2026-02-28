@@ -660,178 +660,123 @@ class MadelineProtoMessenger implements MessengerInterface
      */
 public function normalizeIncomingMessage($rawMessage): array
 {
-    // Логируем входные данные
-    $this->logger->debug('Raw message in normalizeIncomingMessage', [
-        'keys' => is_array($rawMessage) ? array_keys($rawMessage) : 'not an array',
-        'type' => gettype($rawMessage),
-        'hasSessionId' => is_array($rawMessage) && isset($rawMessage['session_id']),
-        'hasMessage' => is_array($rawMessage) && isset($rawMessage['message'])
-    ]);
-
-    // Проверяем структуру MadelineProto
+    // ── 1. Приводим к массиву ────────────────────────────────────
     if (!is_array($rawMessage)) {
-        $this->logger->warning('Raw message is not an array', [
-            'type' => gettype($rawMessage),
-            'value' => $rawMessage
-        ]);
-        
-        // Пробуем декодировать JSON если это строка
         if (is_string($rawMessage)) {
             $decoded = json_decode($rawMessage, true);
-            if ($decoded !== null && is_array($decoded)) {
+            if (is_array($decoded)) {
                 $rawMessage = $decoded;
             } else {
-                return [
-                    'message_id' => null,
-                    'date' => time(),
-                    'text' => $rawMessage,
-                    'chat_id' => null,
-                    'user_id' => null,
-                    'user_name' => 'Unknown',
-                    'is_outgoing' => false,
-                    'entities' => [],
-                    'media_type' => null,
-                    'file_id' => null,
-                    'session_id' => null,
-                    'session_name' => null,
-                    'domain' => null,
-                    'messenger_type' => 'madelineproto',
-                    'raw_peer_id' => null,
-                    'raw_from_id' => null,
-                    'raw_data' => $rawMessage,
-                ];
+                return $this->emptyNormalized($rawMessage);
             }
         } else {
-            return [
-                'message_id' => null,
-                'date' => time(),
-                'text' => '',
-                'chat_id' => null,
-                'user_id' => null,
-                'user_name' => 'Unknown',
-                'is_outgoing' => false,
-                'entities' => [],
-                'media_type' => null,
-                'file_id' => null,
-                'session_id' => null,
-                'session_name' => null,
-                'domain' => null,
-                'messenger_type' => 'madelineproto',
-                'raw_peer_id' => null,
-                'raw_from_id' => null,
-                'raw_data' => $rawMessage,
-            ];
+            return $this->emptyNormalized($rawMessage);
         }
     }
 
-    // Извлекаем метаданные из корневого уровня
-    $sessionId = $rawMessage['session_id'] ?? null;
+    // ── 2. Метаданные сессии ─────────────────────────────────────
+    $sessionId   = $rawMessage['session_id']   ?? null;
     $sessionName = $rawMessage['session_name'] ?? null;
-    $domain = $rawMessage['domain'] ?? null;
-    $accountName = $rawMessage['sender_name'] ?? null;
-    
-    // Извлекаем данные сообщения
-    $messageData = isset($rawMessage['message']) && is_array($rawMessage['message']) 
-        ? $rawMessage['message'] 
+    $domain      = $rawMessage['domain']       ?? null;
+
+    // ── 3. Данные самого сообщения ───────────────────────────────
+    $msg = isset($rawMessage['message']) && is_array($rawMessage['message'])
+        ? $rawMessage['message']
         : $rawMessage;
-    
+
+    $isOutgoing = !empty($msg['out']);
+
+    // ── 4. Числовые id из MadelineProto ─────────────────────────
+    //  from_id  — кто отправил (для входящих = собеседник, для исходящих = мы)
+    //  peer_id  — диалог      (для входящих = мы,         для исходящих = собеседник)
+    $rawFromId = $this->extractRawId($msg['from_id'] ?? null);
+    $rawPeerId = $this->extractRawId($msg['peer_id'] ?? null);
+
+    // ── 5. Ключевой фикс: собеседник всегда одинаковый ──────────
+    //  Входящее (out=false): написала Софья → from_id=Софья, peer_id=Антон → собеседник = Софья (from_id)
+    //  Исходящее (out=true): Антон ответил → from_id=Антон, peer_id=Софья → собеседник = Софья (peer_id)
+    $interlocutorId = $isOutgoing ? $rawPeerId : $rawFromId;
+
+    if (!$interlocutorId) {
+        // Fallback: хоть что-нибудь
+        $interlocutorId = $rawFromId ?? $rawPeerId;
+    }
+
+    $chatId = $interlocutorId ? 'user_' . $interlocutorId : null;
+    $userId = $interlocutorId;
+
+    // ── 6. Имя пользователя ──────────────────────────────────────
+    //  sender_name из webhook — имя того, чьё сообщение (может быть владелец или собеседник)
+    //  Для входящих берём sender_name, для исходящих он не важен (это мы сами)
+    $senderName = $rawMessage['sender_name'] ?? null;
+    $userName   = (!$isOutgoing && $senderName) ? $senderName : 'Unknown';
+
+    // ── 7. Текст ─────────────────────────────────────────────────
     $text = '';
-    $chatId = null;
-    $userId = null;
-    $userName = 'Unknown';
-    $isOutgoing = false;
-    
-    // Извлекаем данные из структуры MadelineProto
-    if (isset($messageData['message']) && is_string($messageData['message'])) {
-        $text = $messageData['message'];
-    } elseif (isset($messageData['_']) && $messageData['_'] === 'message' && isset($messageData['message'])) {
-        $text = $messageData['message'] ?? '';
+    if (isset($msg['message']) && is_string($msg['message'])) {
+        $text = $msg['message'];
     }
-    
-    // Получаем chat_id (peer_id)
-    if (isset($messageData['peer_id'])) {
-        if (is_array($messageData['peer_id'])) {
-            // Структура MadelineProto: peer_id может быть массивом с from_id или chat_id
-            if (isset($messageData['peer_id']['from_id'])) {
-                $chatId = 'user_' . $messageData['peer_id']['from_id'];
-                $userId = $messageData['peer_id']['from_id'];
-            } elseif (isset($messageData['peer_id']['chat_id'])) {
-                $chatId = 'chat_' . $messageData['peer_id']['chat_id'];
-            } elseif (isset($messageData['peer_id']['channel_id'])) {
-                $chatId = 'channel_' . $messageData['peer_id']['channel_id'];
-            }
-        } else {
-            // Просто число
-            $chatId = 'user_' . $messageData['from_id'];
-        }
-    }
-    
-    // Получаем user_id (from_id)
-    if (isset($messageData['from_id'])) {
-        if (is_array($messageData['from_id'])) {
-            if (isset($messageData['from_id']['user_id'])) {
-                $userId = $messageData['from_id']['user_id'];
-            }
-        } else {
-            $userId = $messageData['from_id'];
-        }
-    }
-    
-    // Если chatId не был установлен, но есть userId, используем userId для chatId
-    if (!$chatId && $userId) {
-        $chatId = 'user_' . $userId;
-    }
-    
-    // Получаем имя пользователя из account_name или from_name
-    if ($accountName) {
-        $userName = $accountName;
-    } elseif (isset($messageData['from_name']) && is_string($messageData['from_name'])) {
-        $userName = $messageData['from_name'];
-    }
-    
-    // Проверяем, исходящее ли сообщение
-    $isOutgoing = isset($messageData['out']) ? (bool)$messageData['out'] : false;
-    
-    // Если исходящее сообщение, используем другой ID
-    if ($isOutgoing) {
-        // Для исходящих сообщений user_id может быть нашим ID
-        // В этом случае нужно получить chat_id как получателя
-        if (!$userId && isset($messageData['peer_id']) && !is_array($messageData['peer_id'])) {
-            $userId = $messageData['peer_id'];
-        }
-    }
-    
+
     $result = [
-        'message_id' => $messageData['id'] ?? null,
-        'date' => $messageData['date'] ?? time(),
-        'text' => $text,
-        'chat_id' => $chatId,
-        'user_id' => $userId,
-        'user_name' => $userName,
-        'is_outgoing' => $isOutgoing,
-        'entities' => isset($messageData['entities']) && is_array($messageData['entities']) 
-            ? $messageData['entities'] 
-            : [],
-        'media_type' => isset($messageData['media']) ? get_class($messageData['media']) : null,
-        'file_id' => isset($messageData['media']) ? $this->extractFileId($messageData['media']) : null,
-        'session_id' => $sessionId,
+        'message_id'   => $msg['id']   ?? null,
+        'date'         => $msg['date'] ?? time(),
+        'text'         => $text,
+        'chat_id'      => $chatId,
+        'user_id'      => $userId,
+        'user_name'    => $userName,
+        'is_outgoing'  => $isOutgoing,
+        'entities'     => is_array($msg['entities'] ?? null) ? $msg['entities'] : [],
+        'media_type'   => null,
+        'file_id'      => null,
+        'session_id'   => $sessionId,
         'session_name' => $sessionName,
-        'domain' => $domain,
+        'domain'       => $domain,
         'messenger_type' => 'madelineproto',
-        'raw_peer_id' => $messageData['peer_id'] ?? null,
-        'raw_from_id' => $messageData['from_id'] ?? null,
-        'raw_data' => $rawMessage,
+        'raw_peer_id'  => $rawPeerId,
+        'raw_from_id'  => $rawFromId,
+        'raw_data'     => $rawMessage,
     ];
-    
-    $this->logger->debug('Normalized result', [
-        'session_id' => $sessionId,
-        'chat_id' => $chatId,
-        'user_id' => $userId,
-        'user_name' => $userName,
-        'text' => $text
+
+    $this->logger->info('Normalized message', [
+        'chatId'      => $chatId,
+        'userName'    => $userName,
+        'userId'      => $userId,
+        'text'        => $text,
+        'is_outgoing' => $isOutgoing,
     ]);
-    
+
     return $result;
+}
+
+/**
+ * Извлечь числовой id из from_id / peer_id.
+ * MadelineProto может отдавать число или int напрямую.
+ */
+private function extractRawId(mixed $raw): ?int
+{
+    if ($raw === null) return null;
+    if (is_int($raw))  return $raw;
+    if (is_string($raw) && ctype_digit($raw)) return (int)$raw;
+    // Массив (старый формат MadelineProto)
+    if (is_array($raw)) {
+        return isset($raw['user_id'])    ? (int)$raw['user_id']
+             : (isset($raw['chat_id'])   ? (int)$raw['chat_id']
+             : (isset($raw['channel_id'])? (int)$raw['channel_id']
+             : null));
+    }
+    return null;
+}
+
+private function emptyNormalized(mixed $raw): array
+{
+    return [
+        'message_id' => null, 'date' => time(), 'text' => '',
+        'chat_id' => null, 'user_id' => null, 'user_name' => 'Unknown',
+        'is_outgoing' => false, 'entities' => [], 'media_type' => null,
+        'file_id' => null, 'session_id' => null, 'session_name' => null,
+        'domain' => null, 'messenger_type' => 'madelineproto',
+        'raw_peer_id' => null, 'raw_from_id' => null, 'raw_data' => $raw,
+    ];
 }
 
 private function extractFileId($media): ?string

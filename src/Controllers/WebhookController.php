@@ -47,7 +47,6 @@ class WebhookController
                 return $this->handleMessengerToBitrix($data, $source);
 
             case MessageDetector::SOURCE_MAX:
-                // Если в URL есть ?max_token= — профильный бот, иначе старый путь (доменный)
                 if (!empty($_GET['max_token'])) {
                     return $this->handleMaxBotIncoming($data);
                 }
@@ -59,16 +58,11 @@ class WebhookController
         }
     }
 
-    // ═══════════════════════════════════════════════════════════════
-    //  Telegram Bot → Bitrix24
-    //
-    //  Telegram шлёт POST на /webhook.php?bot_token=TOKEN
-    //  Мы читаем токен из URL, ищем профиль, находим домен, отправляем в Bitrix.
-    // ═══════════════════════════════════════════════════════════════
-
+    /**
+     * Telegram Bot → Bitrix24
+     */
     private function handleTelegramBotIncoming(array $data): array
     {
-        // Токен бота — из URL (?bot_token=xxx), зашит при setWebhook в ProfileController
         $botToken = $_GET['bot_token'] ?? null;
 
         if (empty($botToken)) {
@@ -76,20 +70,17 @@ class WebhookController
             return ['status' => 'ok', 'message' => 'bot_token missing'];
         }
 
-        // Ищем профиль в user_messenger_profiles по токену
-        $profile = $this->findProfileByToken($botToken, 'telegram_bot');
+        $profile = $this->profileRepository->findActiveByTokenAndType($botToken, 'telegram_bot');
 
         if (!$profile) {
             $this->logger->error('telegram_bot: profile not found', [
                 'token_prefix' => substr($botToken, 0, 10) . '...',
             ]);
-            // Возвращаем 200 чтобы Telegram не повторял запрос
             return ['status' => 'ok', 'message' => 'profile not found'];
         }
 
         $profileId = (int)$profile['id'];
 
-        // Извлекаем message из Bot API update
         $message = $data['message']
             ?? $data['edited_message']
             ?? $data['callback_query']['message']
@@ -117,8 +108,7 @@ class WebhookController
             'text'       => mb_substr($text, 0, 50),
         ]);
 
-        // Ищем домен привязанный к профилю (через profile_bitrix_connections)
-        $domain = $this->getDomainByProfileId($profileId);
+        $domain = $this->profileRepository->getDomainByProfileId($profileId);
 
         if (!$domain) {
             $this->logger->error('telegram_bot: no domain for profile', ['profile_id' => $profileId]);
@@ -139,8 +129,6 @@ class WebhookController
             return ['status' => 'error', 'message' => 'Connector not found'];
         }
 
-        // Сохраняем связку чат ↔ домен ↔ профиль в messenger_chat_connections
-        // profile_id нужен при ответе из Bitrix — чтобы знать через какого бота отвечать
         $this->chatRepository->saveConnection(
             'telegram_bot',
             $chatId,
@@ -149,8 +137,8 @@ class WebhookController
             $userName,
             $userId
         );
-        // Отдельно сохраняем profile_id (метод saveConnection его не принимает — дописываем UPDATE)
-        $this->saveProfileIdForChat('telegram_bot', $chatId, $profileId);
+        
+        $this->chatRepository->updateProfileId('telegram_bot', $chatId, $profileId);
 
         $lineId = $this->tokenRepository->getLineByConnectorId($connectorId);
 
@@ -161,15 +149,12 @@ class WebhookController
             return ['status' => 'error', 'message' => 'Line not configured'];
         }
 
-        // Формируем сообщение для Bitrix24.
-        // Префикс tgbot_ в chat.id — по нему при ответе из Bitrix определяем тип мессенджера.
         $bitrixMsg = [
             'user'    => ['id' => $chatId, 'name' => $userName],
             'message' => ['date' => time()],
             'chat'    => ['id' => 'tgbot_' . $chatId],
         ];
 
-        // Файлы: получаем URL через Bot API getFile
         $files = $this->extractBotFiles($message, $botToken);
         if (!empty($files)) {
             $bitrixMsg['message']['files'] = $files;
@@ -188,13 +173,9 @@ class WebhookController
         return ['status' => 'ok', 'action' => 'telegram_bot_message_sent'];
     }
 
-    // ═══════════════════════════════════════════════════════════════
-    //  Max Bot → Bitrix24  (профильный, по аналогии с telegram_bot)
-    //
-    //  Max шлёт POST на /webhook.php?max_token=TOKEN
-    //  Читаем токен из URL, ищем профиль, находим домен, отправляем в Bitrix.
-    // ═══════════════════════════════════════════════════════════════
-
+    /**
+     * Max Bot → Bitrix24
+     */
     private function handleMaxBotIncoming(array $data): array
     {
         $maxToken = $_GET['max_token'] ?? null;
@@ -204,8 +185,7 @@ class WebhookController
             return ['status' => 'ok', 'message' => 'max_token missing'];
         }
 
-        // Ищем профиль в user_messenger_profiles по токену
-        $profile = $this->findProfileByToken($maxToken, 'max');
+        $profile = $this->profileRepository->findActiveByTokenAndType($maxToken, 'max');
 
         if (!$profile) {
             $this->logger->error('max_bot: profile not found', [
@@ -215,15 +195,12 @@ class WebhookController
         }
 
         $profileId = (int)$profile['id'];
-
-        // Max присылает: { "update_type": "message_created", "message": { ... } }
         $message = $data['message'] ?? null;
 
         if (!$message) {
             return ['status' => 'ok', 'action' => 'non_message_update'];
         }
 
-        // В Max chat_id = sender.user_id (личные чаты) или chat.chat_id (групповые)
         $chatId   = (string)($message['sender']['user_id']
             ?? $message['chat_id']
             ?? $message['recipient']['chat_id']
@@ -243,12 +220,10 @@ class WebhookController
             'text'       => mb_substr($text, 0, 50),
         ]);
 
-        // Ищем домен привязанный к профилю
-        $domain = $this->getDomainByProfileId($profileId);
+        $domain = $this->profileRepository->getDomainByProfileId($profileId);
 
         if (!$domain) {
             $this->logger->error('max_bot: no domain for profile', ['profile_id' => $profileId]);
-            // У Max нет sendMessage без домена — просто логируем
             return ['status' => 'error', 'message' => 'Domain not configured'];
         }
 
@@ -262,9 +237,8 @@ class WebhookController
             return ['status' => 'error', 'message' => 'Connector not found'];
         }
 
-        // Сохраняем связку чат ↔ домен ↔ профиль
         $this->chatRepository->saveConnection('max', $chatId, $domain, $connectorId, $userName, $userId);
-        $this->saveProfileIdForChat('max', $chatId, $profileId);
+        $this->chatRepository->updateProfileId('max', $chatId, $profileId);
 
         $lineId = $this->tokenRepository->getLineByConnectorId($connectorId);
 
@@ -272,7 +246,6 @@ class WebhookController
             return ['status' => 'error', 'message' => 'Line not configured'];
         }
 
-        // Собираем файлы из вложений Max
         $files = [];
         foreach (($message['body']['attachments'] ?? []) as $attachment) {
             $type    = $attachment['type'] ?? 'file';
@@ -281,7 +254,7 @@ class WebhookController
             if ($fileUrl) {
                 $files[] = [
                     'url'  => $fileUrl,
-                    'name' => $payload['name'] ?? 'file',
+                    'name' => $payload['filename'] ?? 'file',
                     'type' => in_array($type, ['image', 'photo']) ? 'image' : 'file',
                 ];
             }
@@ -310,10 +283,9 @@ class WebhookController
         return ['status' => 'ok', 'action' => 'max_bot_message_sent'];
     }
 
-    // ═══════════════════════════════════════════════════════════════
-    //  Bitrix24 → Messenger
-    // ═══════════════════════════════════════════════════════════════
-
+    /**
+     * Bitrix24 → Messenger
+     */
     private function handleBitrixToMessenger(array $data): array
     {
         $this->logger->info('Bitrix to Messenger', ['data' => $data]);
@@ -336,13 +308,12 @@ class WebhookController
             }
             $files = $message['message']['files'] ?? [];
 
-            // ── Ответ через Max API (профильный токен) ────────────
+            // Max Bot (профильный токен)
             if ($messengerType === 'max') {
-                $maxToken = $this->getMaxTokenByChatId($chatId, $domain);
+                $maxToken = $this->chatRepository->getMaxTokenByChatId($chatId, $domain);
 
                 if ($maxToken) {
-                    // Профильный бот — отправляем напрямую через токен из профиля
-                    $maxUserId = $this->getMaxUserIdForChat($chatId, $domain);
+                    $maxUserId = $this->chatRepository->getMaxUserIdForChat($chatId, $domain);
                     if (!$maxUserId) {
                         $this->logger->error('max_bot: user_id not found for chat', ['chatId' => $chatId]);
                         $this->sendDeliveryConfirmation($connectorId, $message, $bitrixChatId, $domain, false);
@@ -351,10 +322,8 @@ class WebhookController
 
                     $result = ['success' => false];
                     foreach ($files as $file) {
-                        $fileType = $file['type'] ?? '';
-                        $fileUrl  = $file['downloadLink'] ?? $file['link'] ?? '';
+                        $fileUrl = $file['downloadLink'] ?? $file['link'] ?? '';
                         if ($fileUrl) {
-                            // Max не умеет слать файлы по URL напрямую без upload — отправляем ссылкой в тексте
                             $text = trim($text . "\n" . $fileUrl);
                         }
                     }
@@ -365,14 +334,11 @@ class WebhookController
                     $this->sendDeliveryConfirmation($connectorId, $message, $bitrixChatId, $domain, !empty($result['success']));
                     continue;
                 }
-
-                // Fallback: старый доменный путь (если profile_id не найден)
             }
 
-            // ── Ответ через Telegram Bot API ──────────────────────
+            // Telegram Bot API
             if ($messengerType === 'telegram_bot') {
-                // Находим токен бота через profile_id из messenger_chat_connections
-                $botToken = $this->getBotTokenByChatId($chatId);
+                $botToken = $this->chatRepository->getBotTokenByChatId($chatId);
 
                 if (!$botToken) {
                     $this->logger->error('telegram_bot: token not found for chat', ['chatId' => $chatId]);
@@ -398,7 +364,7 @@ class WebhookController
                 continue;
             }
 
-            // ── Прочие мессенджеры (telegram_user, max) — без изменений ──
+            // Остальные мессенджеры
             $messenger = $this->messengerFactory->create($messengerType);
 
             if ($messengerType === 'max' && method_exists($messenger, 'setDomain')) {
@@ -416,7 +382,7 @@ class WebhookController
             }
 
             if ($messengerType === 'max') {
-                $maxUserId = $this->getMaxUserIdForChat($chatId, $domain);
+                $maxUserId = $this->chatRepository->getMaxUserIdForChat($chatId, $domain);
                 if (!$maxUserId) {
                     $this->logger->error('Max user_id not found for chat', ['chatId' => $chatId]);
                     continue;
@@ -462,10 +428,9 @@ class WebhookController
         return ['status' => 'ok', 'action' => 'bitrix_to_messenger'];
     }
 
-    // ═══════════════════════════════════════════════════════════════
-    //  Messenger → Bitrix (telegram_user, max) — без изменений
-    // ═══════════════════════════════════════════════════════════════
-
+    /**
+     * Messenger → Bitrix
+     */
     private function handleMessengerToBitrix(array $data, string $source): array
     {
         $this->logger->info('Messenger to Bitrix', ['source' => $source, 'data' => $data]);
@@ -538,7 +503,7 @@ class WebhookController
         }
 
         if (!$domain) {
-            $domain = $this->getDomainByProfileId($profileId);
+            $domain = $this->profileRepository->getDomainByProfileId($profileId);
 
             if (!$domain) {
                 $this->logger->error('Domain not found for profile_id', ['profile_id' => $profileId]);
@@ -598,8 +563,7 @@ class WebhookController
             $messenger->sendMessage($chatId, "✅ <b>Соединение установлено!</b>\n\n🌐 <b>Домен:</b> $domain\nТеперь ваши сообщения будут отправляться в Bitrix24.");
         }
 
-        // Заполняем profile_id в messenger_chat_connections если ещё не заполнен
-        $this->fillMaxProfileIdForChat($chatId, $domain);
+        $this->chatRepository->fillMaxProfileId($chatId, $domain);
 
         return $this->processMessengerMessage($domain, 'max', $chatId, $messenger, $userName, $normalizedMessage);
     }
@@ -607,9 +571,6 @@ class WebhookController
     private function handleOtherMessenger($domain, $chatId, $messenger, $userName, $userId, $text, $source): array
     {
         if (!$domain) {
-            if ($text) {
-                $this->processBotCommand($source, $chatId, $text, $messenger, $userName, $userId);
-            }
             return ['status' => 'ok', 'action' => 'no_domain'];
         }
         return $this->processMessengerMessage($domain, $source, $chatId, $messenger, $userName, []);
@@ -644,10 +605,9 @@ class WebhookController
         return ['status' => 'ok', 'action' => 'message_sent', 'source' => $source];
     }
 
-    // ═══════════════════════════════════════════════════════════════
-    //  Telegram Bot API — отправка
-    // ═══════════════════════════════════════════════════════════════
-
+    /**
+     * Telegram Bot API methods
+     */
     private function sendBotMessage(string $token, string $chatId, string $text): array
     {
         return $this->callBotApi($token, 'sendMessage', [
@@ -693,9 +653,6 @@ class WebhookController
         return json_decode($response, true) ?? ['ok' => false];
     }
 
-    /**
-     * Извлечь файлы из Bot API message и получить их URL через getFile.
-     */
     private function extractBotFiles(array $message, string $botToken): array
     {
         $files  = [];
@@ -733,119 +690,9 @@ class WebhookController
         return $files;
     }
 
-    // ═══════════════════════════════════════════════════════════════
-    //  DB helpers
-    // ═══════════════════════════════════════════════════════════════
-
     /**
-     * Найти профиль в user_messenger_profiles по токену и типу.
+     * Helper methods
      */
-    private function findProfileByToken(string $token, string $messengerType): ?array
-    {
-        $stmt = $this->profileRepository->getPdo()->prepare("
-            SELECT *
-            FROM user_messenger_profiles
-            WHERE token          = ?
-              AND messenger_type = ?
-              AND is_active      = 1
-            LIMIT 1
-        ");
-        $stmt->execute([$token, $messengerType]);
-        return $stmt->fetch(\PDO::FETCH_ASSOC) ?: null;
-    }
-
-    /**
-     * Найти домен по profile_id.
-     * Смотрим в profile_bitrix_connections — там saveConnection() сохраняет связку.
-     */
-    private function getDomainByProfileId(int $profileId): ?string
-    {
-        $stmt = $this->profileRepository->getPdo()->prepare("
-            SELECT domain
-            FROM profile_bitrix_connections
-            WHERE profile_id = ?
-              AND is_active   = 1
-            ORDER BY id DESC
-            LIMIT 1
-        ");
-        $stmt->execute([$profileId]);
-        $row = $stmt->fetch(\PDO::FETCH_ASSOC);
-
-        if ($row) return $row['domain'];
-
-        // Fallback: через user_id — один домен на пользователя
-        $stmt2 = $this->profileRepository->getPdo()->prepare("
-            SELECT bit.domain
-            FROM user_messenger_profiles ump
-            JOIN bitrix_integration_tokens bit ON bit.user_id = ump.user_id
-            WHERE ump.id        = ?
-              AND bit.domain    IS NOT NULL
-              AND bit.domain    != ''
-              AND bit.is_active = 1
-            LIMIT 1
-        ");
-        $stmt2->execute([$profileId]);
-        $row2 = $stmt2->fetch(\PDO::FETCH_ASSOC);
-
-        return $row2['domain'] ?? null;
-    }
-
-    /**
-     * Сохранить profile_id в messenger_chat_connections для telegram_bot чата.
-     * Нужно при ответе из Bitrix24 — чтобы знать через какого бота отвечать.
-     */
-    private function saveProfileIdForChat(string $messengerType, string $chatId, int $profileId): void
-    {
-        // Таблица messenger_chat_connections создаётся в ChatRepository.
-        // Добавляем колонку profile_id если её ещё нет (один раз, потом закешируется).
-        try {
-            $this->profileRepository->getPdo()->prepare("
-                UPDATE messenger_chat_connections
-                SET profile_id = ?
-                WHERE messenger_type = ? AND messenger_chat_id = ?
-            ")->execute([$profileId, $messengerType, $chatId]);
-        } catch (\Throwable $e) {
-            // Если колонки profile_id нет — добавляем
-            try {
-                $this->profileRepository->getPdo()->exec(
-                    "ALTER TABLE messenger_chat_connections ADD COLUMN IF NOT EXISTS profile_id INT NULL"
-                );
-                $this->profileRepository->getPdo()->prepare("
-                    UPDATE messenger_chat_connections
-                    SET profile_id = ?
-                    WHERE messenger_type = ? AND messenger_chat_id = ?
-                ")->execute([$profileId, $messengerType, $chatId]);
-            } catch (\Throwable $e2) {
-                $this->logger->error('saveProfileIdForChat failed', ['error' => $e2->getMessage()]);
-            }
-        }
-    }
-
-    /**
-     * Получить токен бота по chat_id.
-     * Берём profile_id из messenger_chat_connections, потом token из user_messenger_profiles.
-     */
-    private function getBotTokenByChatId(string $chatId): ?string
-    {
-        $stmt = $this->profileRepository->getPdo()->prepare("
-            SELECT ump.token
-            FROM messenger_chat_connections mcc
-            JOIN user_messenger_profiles ump ON ump.id = mcc.profile_id
-            WHERE mcc.messenger_type    = 'telegram_bot'
-              AND mcc.messenger_chat_id = ?
-              AND mcc.is_active         = 1
-              AND ump.is_active         = 1
-            LIMIT 1
-        ");
-        $stmt->execute([$chatId]);
-        $row = $stmt->fetch(\PDO::FETCH_ASSOC);
-        return $row['token'] ?? null;
-    }
-
-    // ═══════════════════════════════════════════════════════════════
-    //  Helpers — без изменений относительно оригинала
-    // ═══════════════════════════════════════════════════════════════
-
     private function prepareMessagesForBitrix(array $normalized, MessengerInterface $messenger, string $chatId, string $userName): array
     {
         $messages      = [];
@@ -862,6 +709,7 @@ class WebhookController
                     $fileName = $file['filename']
                         ?? $normalized['raw']['body']['attachments'][0]['filename']
                         ?? $file['name']
+                        ?? $file['file_name']
                         ?? 'file';
                     $mainMessage['message']['files'][] = [
                         'url'  => $fileUrl,
@@ -933,58 +781,6 @@ class WebhookController
         return trim($text, " :-\t\n\r\0\x0B");
     }
 
-    /**
-     * Получить токен Max профиля по chat_id.
-     *
-     * Шаг 1: ищем через messenger_chat_connections.profile_id (чат уже был).
-     * Шаг 2 (fallback): если чата нет — берём первый активный max-профиль
-     *   привязанный к домену через profile_bitrix_connections.
-     */
-    private function getMaxTokenByChatId(string $chatId, string $domain = ''): ?string
-    {
-        // Шаг 1: по chat_id через messenger_chat_connections
-        $stmt = $this->profileRepository->getPdo()->prepare("
-            SELECT ump.token
-            FROM messenger_chat_connections mcc
-            JOIN user_messenger_profiles ump ON ump.id = mcc.profile_id
-            WHERE mcc.messenger_type    = 'max'
-              AND mcc.messenger_chat_id = ?
-              AND mcc.is_active         = 1
-              AND ump.is_active         = 1
-            LIMIT 1
-        ");
-        $stmt->execute([$chatId]);
-        $row = $stmt->fetch(\PDO::FETCH_ASSOC);
-
-        if (!empty($row['token'])) {
-            return $row['token'];
-        }
-
-        // Шаг 2 (fallback): по домену через profile_bitrix_connections
-        if (empty($domain)) {
-            return null;
-        }
-
-        $stmt2 = $this->profileRepository->getPdo()->prepare("
-            SELECT ump.token
-            FROM profile_bitrix_connections pbc
-            JOIN user_messenger_profiles ump ON ump.id = pbc.profile_id
-            WHERE pbc.domain         = ?
-              AND ump.messenger_type = 'max'
-              AND ump.is_active      = 1
-              AND pbc.is_active      = 1
-            ORDER BY pbc.id DESC
-            LIMIT 1
-        ");
-        $stmt2->execute([$domain]);
-        $row2 = $stmt2->fetch(\PDO::FETCH_ASSOC);
-
-        return $row2['token'] ?? null;
-    }
-
-    /**
-     * Отправить сообщение через Max Bot API (профильный токен)
-     */
     private function sendMaxBotMessage(string $token, string $userId, string $text): array
     {
         $url = 'https://platform-api.max.ru/messages?user_id=' . urlencode($userId);
@@ -1013,49 +809,6 @@ class WebhookController
         return ['success' => $httpCode === 200, 'response' => json_decode($response, true)];
     }
 
-    /**
-     * Заполнить profile_id в messenger_chat_connections для max чата.
-     * Ищет профиль через profile_bitrix_connections по домену.
-     * Вызывается при каждом входящем сообщении — UPDATE выполнится только если profile_id IS NULL.
-     */
-    private function fillMaxProfileIdForChat(string $chatId, string $domain): void
-    {
-        try {
-            $stmt = $this->profileRepository->getPdo()->prepare("
-                UPDATE messenger_chat_connections mcc
-                JOIN profile_bitrix_connections pbc ON pbc.domain = mcc.domain
-                JOIN user_messenger_profiles ump ON ump.id = pbc.profile_id
-                SET mcc.profile_id = ump.id
-                WHERE mcc.messenger_type    = 'max'
-                  AND mcc.messenger_chat_id = ?
-                  AND mcc.domain            = ?
-                  AND mcc.profile_id        IS NULL
-                  AND ump.messenger_type    = 'max'
-                  AND ump.is_active         = 1
-                  AND pbc.is_active         = 1
-                LIMIT 1
-            ");
-            $stmt->execute([$chatId, $domain]);
-        } catch (\Throwable $e) {
-            $this->logger->error('fillMaxProfileIdForChat failed', ['error' => $e->getMessage()]);
-        }
-    }
-
-    private function getMaxUserIdForChat(string $chatId, string $domain): ?string
-    {
-        $chatInfo = $this->chatRepository->getChatInfo('max', $chatId);
-        if ($chatInfo && !empty($chatInfo['user_id'])) {
-            return $chatInfo['user_id'];
-        }
-        return $chatId;
-    }
-
-    /**
-     * По префиксу chat.id из Bitrix24 определяем тип мессенджера.
-     * tgbot_ → telegram_bot (НОВЫЙ)
-     * tg_ / telegram_ → telegram (старый)
-     * max_ → max
-     */
     private function detectMessengerTypeFromChatId(string $chatId): string
     {
         if (str_starts_with($chatId, 'tgbot_'))  return 'telegram_bot';
@@ -1099,54 +852,5 @@ class WebhookController
         } catch (\Exception $e) {
             $this->logger->error('Error sending delivery confirmation', ['error' => $e->getMessage()]);
         }
-    }
-
-    private function processBotCommand(string $messengerType, string $chatId, string $text, MessengerInterface $messenger, string $userName = '', string $userId = ''): void
-    {
-        $text = trim($text);
-        if (!str_starts_with($text, '/')) return;
-
-        $command = strtolower(trim($text, '/'));
-
-        switch ($command) {
-            case 'start':
-                $msg = "👋 <b>Добро пожаловать, $userName!</b>\n\nДля привязки аккаунта отправьте ваш домен Bitrix24.\nПример: <code>mydomain.bitrix24.ru</code>";
-                break;
-            case 'help':
-                $msg = "🆘 <b>Доступные команды:</b>\n\n/start - Начать работу\n/help - Показать справку\n/status - Проверить статус привязки";
-                break;
-            case 'status':
-                $chatInfo = $this->chatRepository->getChatInfo($messengerType, $chatId);
-                if ($chatInfo && $chatInfo['is_active']) {
-                    $domain      = $chatInfo['domain'];
-                    $connectorId = $this->tokenRepository->getConnectorId($domain, $messengerType);
-                    $msg = "✅ <b>Аккаунт привязан</b>\n\n🌐 <b>Домен:</b> $domain\n🤖 <b>Мессенджер:</b> " . ucfirst($messengerType) . "\n🆔 <b>Connector ID:</b> " . ($connectorId ?? 'не найден');
-                } else {
-                    $msg = "❌ <b>Аккаунт не привязан</b>\n\nОтправьте ваш домен Bitrix24 для привязки.";
-                }
-                break;
-            default:
-                if ($this->isValidDomain($text)) {
-                    $domain      = $text;
-                    $connectorId = $this->tokenRepository->getConnectorId($domain, $messengerType);
-                    if ($connectorId) {
-                        $this->chatRepository->saveConnection($messengerType, $chatId, $domain, $connectorId, $userName, $userId);
-                        $msg = "✅ <b>Домен успешно привязан!</b>\n\n🌐 <b>Домен:</b> $domain";
-                    } else {
-                        $msg = "❌ <b>Домен не найден!</b>\n\nСначала установите приложение в Bitrix24 на домене: $domain";
-                    }
-                } else {
-                    $msg = "❌ <b>Неизвестная команда</b>\n\nИспользуйте /help для просмотра доступных команд.";
-                }
-                break;
-        }
-
-        $messenger->sendMessage($chatId, $msg);
-    }
-
-    private function isValidDomain(string $domain): bool
-    {
-        $domain = trim(preg_replace('/^https?:\/\//', '', $domain));
-        return preg_match('/^[a-zA-Z0-9.-]+\.bitrix24\.(ru|com|by|kz|ua|su)$/', $domain) === 1;
     }
 }

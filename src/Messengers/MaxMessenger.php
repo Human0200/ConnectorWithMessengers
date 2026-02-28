@@ -96,7 +96,7 @@ class MaxMessenger implements MessengerInterface
         if (!$this->checkDomain()) {
             return ['ok' => false, 'error' => 'Domain not set'];
         }
-        $originalName = $fileData['name'] ?? $fileData['filename'] ?? null;
+        $originalName = $fileData['name'] ?? null;
 
         $result = $this->maxService->sendFile(
             $chatId,

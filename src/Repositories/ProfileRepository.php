@@ -289,4 +289,80 @@ class ProfileRepository
         }
         return $row;
     }
+    /**
+ * Найти активный профиль по токену и типу
+ */
+public function findActiveByTokenAndType(string $token, string $messengerType): ?array
+{
+    $stmt = $this->pdo->prepare("
+        SELECT *
+        FROM user_messenger_profiles
+        WHERE token = ?
+          AND messenger_type = ?
+          AND is_active = 1
+        LIMIT 1
+    ");
+    $stmt->execute([$token, $messengerType]);
+    return $stmt->fetch(PDO::FETCH_ASSOC) ?: null;
+}
+
+/**
+ * Получить домен по profile_id
+ */
+public function getDomainByProfileId(int $profileId): ?string
+{
+    // Сначала ищем в profile_bitrix_connections
+    $stmt = $this->pdo->prepare("
+        SELECT domain
+        FROM profile_bitrix_connections
+        WHERE profile_id = ?
+          AND is_active = 1
+        ORDER BY id DESC
+        LIMIT 1
+    ");
+    $stmt->execute([$profileId]);
+    $row = $stmt->fetch(PDO::FETCH_ASSOC);
+    
+    if ($row) {
+        return $row['domain'];
+    }
+    
+    // Fallback: через user_id
+    $stmt = $this->pdo->prepare("
+        SELECT bit.domain
+        FROM user_messenger_profiles ump
+        JOIN bitrix_integration_tokens bit ON bit.user_id = ump.user_id
+        WHERE ump.id = ?
+          AND bit.domain IS NOT NULL
+          AND bit.domain != ''
+          AND bit.is_active = 1
+        LIMIT 1
+    ");
+    $stmt->execute([$profileId]);
+    $row = $stmt->fetch(PDO::FETCH_ASSOC);
+    
+    return $row['domain'] ?? null;
+}
+
+/**
+ * Получить токен Max по домену
+ */
+public function findMaxTokenByDomain(string $domain): ?string
+{
+    $stmt = $this->pdo->prepare("
+        SELECT ump.token
+        FROM profile_bitrix_connections pbc
+        JOIN user_messenger_profiles ump ON ump.id = pbc.profile_id
+        WHERE pbc.domain = ?
+          AND ump.messenger_type = 'max'
+          AND ump.is_active = 1
+          AND pbc.is_active = 1
+        ORDER BY pbc.id DESC
+        LIMIT 1
+    ");
+    $stmt->execute([$domain]);
+    $row = $stmt->fetch(PDO::FETCH_ASSOC);
+    return $row['token'] ?? null;
+}
+    
 }
