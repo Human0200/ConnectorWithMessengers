@@ -655,9 +655,9 @@ class MadelineProtoMessenger implements MessengerInterface
         }
     }
 
-    /**
-     * Преобразовать сообщение из MadelineProto в универсальный формат
-     */
+/**
+ * Преобразовать сообщение из MadelineProto в универсальный формат
+ */
 public function normalizeIncomingMessage($rawMessage): array
 {
     // ── 1. Приводим к массиву ────────────────────────────────────
@@ -687,18 +687,13 @@ public function normalizeIncomingMessage($rawMessage): array
     $isOutgoing = !empty($msg['out']);
 
     // ── 4. Числовые id из MadelineProto ─────────────────────────
-    //  from_id  — кто отправил (для входящих = собеседник, для исходящих = мы)
-    //  peer_id  — диалог      (для входящих = мы,         для исходящих = собеседник)
     $rawFromId = $this->extractRawId($msg['from_id'] ?? null);
     $rawPeerId = $this->extractRawId($msg['peer_id'] ?? null);
 
     // ── 5. Ключевой фикс: собеседник всегда одинаковый ──────────
-    //  Входящее (out=false): написала Софья → from_id=Софья, peer_id=Антон → собеседник = Софья (from_id)
-    //  Исходящее (out=true): Антон ответил → from_id=Антон, peer_id=Софья → собеседник = Софья (peer_id)
     $interlocutorId = $isOutgoing ? $rawPeerId : $rawFromId;
 
     if (!$interlocutorId) {
-        // Fallback: хоть что-нибудь
         $interlocutorId = $rawFromId ?? $rawPeerId;
     }
 
@@ -706,10 +701,16 @@ public function normalizeIncomingMessage($rawMessage): array
     $userId = $interlocutorId;
 
     // ── 6. Имя пользователя ──────────────────────────────────────
-    //  sender_name из webhook — имя того, чьё сообщение (может быть владелец или собеседник)
-    //  Для входящих берём sender_name, для исходящих он не важен (это мы сами)
     $senderName = $rawMessage['sender_name'] ?? null;
-    $userName   = (!$isOutgoing && $senderName) ? $senderName : 'Unknown';
+    
+    // Для исходящих сообщений пытаемся получить имя из сессии или аккаунта
+    if ($isOutgoing) {
+        // Для исходящих сообщений можно использовать имя из сессии
+        $userName = $this->getSessionAccountName() ?? $senderName ?? 'Unknown';
+    } else {
+        // Для входящих используем sender_name из вебхука
+        $userName = $senderName ?? 'Unknown';
+    }
 
     // ── 7. Текст ─────────────────────────────────────────────────
     $text = '';
@@ -743,9 +744,32 @@ public function normalizeIncomingMessage($rawMessage): array
         'userId'      => $userId,
         'text'        => $text,
         'is_outgoing' => $isOutgoing,
+        'sender_name' => $senderName,
     ]);
 
     return $result;
+}
+
+/**
+ * Получить имя аккаунта текущей сессии
+ */
+private function getSessionAccountName(): ?string
+{
+    try {
+        $info = $this->getInfo();
+        if ($info['success'] && isset($info['first_name'])) {
+            $name = $info['first_name'];
+            if (!empty($info['last_name'])) {
+                $name .= ' ' . $info['last_name'];
+            }
+            return $name;
+        }
+    } catch (Exception $e) {
+        $this->logger->debug('Failed to get session account name', [
+            'error' => $e->getMessage()
+        ]);
+    }
+    return null;
 }
 
 /**
