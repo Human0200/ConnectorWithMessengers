@@ -1,0 +1,816 @@
+<!DOCTYPE html>
+<html lang="ru">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ConnectHub</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link
+        href="https://fonts.googleapis.com/css2?family=Syne:wght@400;500;600;700;800&family=Geist:wght@300;400;500;600&family=Geist+Mono:wght@400;500&display=swap"
+        rel="stylesheet">
+    <link rel="stylesheet" href="app.css">
+    <link rel="stylesheet" href="app_wide.css">
+</head>
+
+<body>
+
+    <!-- ═══════════════════════════════════════════ LOGIN ═══════ -->
+    <div id="sLogin" class="screen auth-screen active">
+        <div class="auth-grid"></div>
+        <div class="auth-glow"></div>
+        <div class="auth-card">
+            <div class="logo">
+                <div class="logo-mark">⚡</div>
+                <span class="logo-name">ConnectHub</span>
+            </div>
+            <div class="auth-heading">Вход в аккаунт</div>
+            <div class="auth-sub">Управляйте профилями мессенджеров в одном месте</div>
+            <div id="loginAlert" class="alert"></div>
+            <div class="f" id="lf1">
+                <label>Email</label>
+                <input type="email" id="lEmail" placeholder="you@example.com" autocomplete="email">
+                <div class="ferr" id="lEmailE"></div>
+            </div>
+            <div class="f" id="lf2">
+                <label>Пароль</label>
+                <input type="password" id="lPass" placeholder="••••••••" autocomplete="current-password"
+                    onkeydown="if(event.key==='Enter')doLogin()">
+                <div class="ferr" id="lPassE"></div>
+            </div>
+            <button class="btn btn-primary btn-block" id="loginBtn" onclick="doLogin()">Войти</button>
+            <div class="auth-switch">Нет аккаунта? <a href="#" onclick="goScreen('sRegister')">Зарегистрироваться</a>
+            </div>
+        </div>
+    </div>
+
+    <!-- ══════════════════════════════════════════ REGISTER ═══════ -->
+    <div id="sRegister" class="screen auth-screen">
+        <div class="auth-grid"></div>
+        <div class="auth-glow"></div>
+        <div class="auth-card">
+            <div class="logo">
+                <div class="logo-mark">⚡</div>
+                <span class="logo-name">ConnectHub</span>
+            </div>
+            <div class="auth-heading">Создать аккаунт</div>
+            <div class="auth-sub">Начните принимать сообщения из мессенджеров в Bitrix24</div>
+            <div id="regAlert" class="alert"></div>
+            <div class="f" id="rf1">
+                <label>Имя</label>
+                <input type="text" id="rName" placeholder="Иван Иванов" autocomplete="name">
+                <div class="ferr" id="rNameE"></div>
+            </div>
+            <div class="f" id="rf2">
+                <label>Email</label>
+                <input type="email" id="rEmail" placeholder="you@example.com" autocomplete="email">
+                <div class="ferr" id="rEmailE"></div>
+            </div>
+            <div class="f" id="rf3">
+                <label>Пароль</label>
+                <input type="password" id="rPass" placeholder="мин. 8 символов" autocomplete="new-password"
+                    onkeydown="if(event.key==='Enter')doRegister()">
+                <div class="ferr" id="rPassE"></div>
+            </div>
+            <button class="btn btn-primary btn-block" id="regBtn" onclick="doRegister()">Создать аккаунт</button>
+            <div class="auth-switch">Есть аккаунт? <a href="#" onclick="goScreen('sLogin')">Войти</a></div>
+        </div>
+    </div>
+
+    <!-- ═══════════════════════════════════════════════ APP ═══════ -->
+    <div id="sApp" class="screen app-screen">
+
+        <!-- SIDEBAR -->
+        <aside class="sidebar">
+            <div class="sb-logo">
+                <div class="sb-logo-mark">⚡</div>
+                <span class="sb-logo-name">ConnectHub</span>
+            </div>
+            <nav class="sb-nav">
+                <div class="sb-section">
+                    <span class="sb-label">Главное</span>
+                    <button class="sb-item on" onclick="nav('Dashboard',this)">
+                        <span class="sb-icon">◻</span> Обзор
+                    </button>
+                    <button class="sb-item" onclick="nav('Profiles',this)">
+                        <span class="sb-icon">◈</span> Профили
+                        <span id="sbBadge" class="sb-badge" style="display:none"></span>
+                    </button>
+                </div>
+                <div class="sb-section">
+                    <span class="sb-label">Сервис</span>
+                    <button class="sb-item" onclick="nav('Payment',this)">
+                        <span class="sb-icon">◉</span> Оплата
+                    </button>
+                    <button class="sb-item" onclick="nav('Docs',this)">
+                        <span class="sb-icon">◧</span> Инструкция
+                    </button>
+                    <button class="sb-item" onclick="nav('Support',this)">
+                        <span class="sb-icon">◎</span> Поддержка
+                    </button>
+                </div>
+                <div class="sb-divider"></div>
+                <div class="sb-section">
+                    <button class="sb-item" onclick="nav('Settings',this)">
+                        <span class="sb-icon">⊙</span> Настройки
+                    </button>
+                </div>
+            </nav>
+            <div class="sb-user">
+                <div class="sb-avatar" id="sbAvatar">И</div>
+                <div style="flex:1;min-width:0">
+                    <div class="sb-uname" id="sbName">...</div>
+                    <div class="sb-uemail" id="sbEmail"></div>
+                </div>
+                <button class="sb-logout" onclick="doLogout()" title="Выйти">⏏</button>
+            </div>
+        </aside>
+
+        <main class="main">
+
+            <!-- ══════════════════════════════ DASHBOARD ══════ -->
+            <div id="pDashboard" class="page on">
+                <div class="ph">
+                    <div class="ph-left">
+                        <div class="ph-title">Обзор</div>
+                        <div class="ph-sub">Добро пожаловать в ConnectHub</div>
+                    </div>
+                </div>
+
+                <div class="token-hero">
+                    <div class="th-eyebrow">API-токен аккаунта</div>
+                    <div class="th-title">Ваш токен для подключения к Bitrix24</div>
+                    <div class="th-desc">Вставьте этот токен в настройки приложения Bitrix24. Он идентифицирует ваш
+                        аккаунт и даёт доступ ко всем профилям мессенджеров.</div>
+                    <div class="th-box">
+                        <div class="th-val" id="heroToken">Загрузка...</div>
+                        <button class="th-copy" onclick="copyToken()">Скопировать</button>
+                    </div>
+                    <button class="th-regen" onclick="regenToken()">Перегенерировать токен</button>
+                </div>
+
+                <div class="stats">
+                    <div class="stat">
+                        <div class="stat-n" id="stTotal">—</div>
+                        <div class="stat-l">Профилей всего</div>
+                    </div>
+                    <div class="stat">
+                        <div class="stat-n" id="stActive">—</div>
+                        <div class="stat-l">Активных</div>
+                    </div>
+                    <div class="stat">
+                        <div class="stat-n" id="stTypes">—</div>
+                        <div class="stat-l">Типов мессенджеров</div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header">
+                        <div class="card-title" style="margin-bottom:0">Профили мессенджеров</div>
+                        <button class="btn btn-outline btn-sm"
+                            onclick="nav('Profiles',document.querySelectorAll('.sb-item')[1])">Все →</button>
+                    </div>
+                    <div id="dashProfiles">
+                        <div class="empty" style="padding:20px 0"><span class="spin dk"></span></div>
+                    </div>
+                </div>
+
+                <!-- ═══ SIDE PANEL (только >= 1280px) ═══ -->
+                <aside class="side-panel">
+                    <div class="sp-card">
+                        <div class="sp-title">Быстрые действия</div>
+                        <div class="sp-actions">
+                            <button class="sp-action" onclick="openNewProfile()">
+                                <div class="sp-action-ico" style="background:rgba(79,110,247,.15)">＋</div>
+                                Добавить профиль
+                            </button>
+                            <button class="sp-action" onclick="nav('Docs',document.querySelectorAll('.sb-item')[3])">
+                                <div class="sp-action-ico" style="background:rgba(6,182,212,.1)">◧</div>
+                                Инструкция
+                            </button>
+                            <button class="sp-action" onclick="nav('Support',document.querySelectorAll('.sb-item')[4])">
+                                <div class="sp-action-ico" style="background:rgba(34,197,94,.1)">◎</div>
+                                Поддержка
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="sp-card">
+                        <div class="sp-title">Статус систем</div>
+                        <div class="sp-status-row">
+                            <span class="sp-status-label">Webhook сервер</span>
+                            <span><span class="sp-dot green"></span><span
+                                    style="font-size:12px;color:var(--green)">Работает</span></span>
+                        </div>
+                        <div class="sp-status-row">
+                            <span class="sp-status-label">Max API</span>
+                            <span><span class="sp-dot green"></span><span
+                                    style="font-size:12px;color:var(--green)">Онлайн</span></span>
+                        </div>
+                        <div class="sp-status-row">
+                            <span class="sp-status-label">Telegram API</span>
+                            <span><span class="sp-dot green"></span><span
+                                    style="font-size:12px;color:var(--green)">Онлайн</span></span>
+                        </div>
+                        <div class="sp-status-row">
+                            <span class="sp-status-label">Bitrix24</span>
+                            <span><span class="sp-dot green"></span><span
+                                    style="font-size:12px;color:var(--green)">Онлайн</span></span>
+                        </div>
+                    </div>
+
+                    <div class="sp-tip">
+                        <div class="sp-tip-icon">💡</div>
+                        <div class="sp-tip-text">
+                            <strong>Совет:</strong> После создания профиля активируйте коннектор в Bitrix24 — все
+                            профили привяжутся к домену автоматически.
+                        </div>
+                    </div>
+                </aside>
+            </div>
+
+            <!-- ══════════════════════════════ PROFILES ══════ -->
+            <div id="pProfiles" class="page">
+                <div class="ph">
+                    <div class="ph-left">
+                        <div class="ph-title">Профили</div>
+                        <div class="ph-sub">Max, Telegram Bot, Telegram User</div>
+                    </div>
+                </div>
+                <div id="profilesList">
+                    <div class="empty"><span class="spin dk"></span>
+                    </div>
+
+                </div>
+                <button class="btn btn-primary" onclick="openNewProfile()">+ Добавить профиль</button>
+
+                <!-- ═══ SIDE PANEL (только >= 1280px) ═══ -->
+                <aside class="side-panel">
+                    <div class="sp-card">
+                        <div class="sp-title">Добавить профиль</div>
+                        <div class="sp-actions">
+                            <button class="sp-action" onclick="G('npType').value='max';onTypeChange();openNewProfile()">
+                                <div class="sp-action-ico" style="background:rgba(239,68,68,.12)">🟥</div>
+                                <div>
+                                    <div style="font-weight:500;color:var(--ink);font-size:13px">Max</div>
+                                    <div style="font-size:10px;margin-top:1px;color:var(--ink3)">Токен из кабинета
+                                        разработчика</div>
+                                </div>
+                            </button>
+                            <button class="sp-action"
+                                onclick="G('npType').value='telegram_bot';onTypeChange();openNewProfile()">
+                                <div class="sp-action-ico" style="background:rgba(6,182,212,.1)">🤖</div>
+                                <div>
+                                    <div style="font-weight:500;color:var(--ink);font-size:13px">Telegram Bot</div>
+                                    <div style="font-size:10px;margin-top:1px;color:var(--ink3)">Токен от @BotFather
+                                    </div>
+                                </div>
+                            </button>
+                            <button class="sp-action"
+                                onclick="G('npType').value='telegram_user';onTypeChange();openNewProfile()">
+                                <div class="sp-action-ico" style="background:rgba(167,139,250,.1)">👤</div>
+                                <div>
+                                    <div style="font-weight:500;color:var(--ink);font-size:13px">Telegram User</div>
+                                    <div style="font-size:10px;margin-top:1px;color:var(--ink3)">Авторизация через
+                                        QR-код</div>
+                                </div>
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="sp-tip">
+                        <div class="sp-tip-icon">🔗</div>
+                        <div class="sp-tip-text">
+                            <strong>Привязка к Bitrix24:</strong> Создайте профиль, затем активируйте коннектор в
+                            Bitrix24 с вашим API-токеном.
+                        </div>
+                    </div>
+                </aside>
+            </div>
+
+            <!-- ══════════════════════════════ PAYMENT ══════ -->
+            <div id="pPayment" class="page">
+                <div class="ph">
+                    <div class="ph-left">
+                        <div class="ph-title">Оплата</div>
+                        <div class="ph-sub">Тарифные планы и история платежей</div>
+                    </div>
+                </div>
+
+                <div class="card"
+                    style="margin-bottom:24px;background:linear-gradient(135deg,rgba(79,110,247,.08),var(--bg2));border-color:rgba(79,110,247,.2)">
+                    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px">
+                        <div>
+                            <div
+                                style="font-size:11px;font-weight:600;letter-spacing:.8px;text-transform:uppercase;color:var(--accent);margin-bottom:4px">
+                                Текущий план</div>
+                            <div style="font-family:var(--display);font-size:22px;font-weight:700">Бесплатный</div>
+                            <div style="font-size:12px;color:var(--ink2);margin-top:3px">Активен · 3 профиля включено
+                            </div>
+                        </div>
+                        <button class="btn btn-primary" onclick="toast('Скоро будет доступно!','ok')">Улучшить
+                            план</button>
+                    </div>
+                </div>
+
+                <div class="plan-grid">
+                    <div class="plan">
+                        <div class="plan-name">Starter</div>
+                        <div class="plan-price">0 <span>₽</span></div>
+                        <div class="plan-period">навсегда бесплатно</div>
+                        <div class="plan-divider"></div>
+                        <ul class="plan-features">
+                            <li>3 профиля мессенджеров</li>
+                            <li>Max + Telegram Bot</li>
+                            <li>Базовая поддержка</li>
+                            <li class="no">Telegram User</li>
+                            <li class="no">Приоритетная поддержка</li>
+                        </ul>
+                        <button class="btn btn-dark btn-block" disabled>Текущий план</button>
+                    </div>
+                    <div class="plan featured">
+                        <div class="plan-name">Pro</div>
+                        <div class="plan-price">1 490 <span>₽</span></div>
+                        <div class="plan-period">в месяц · первый месяц бесплатно</div>
+                        <div class="plan-divider"></div>
+                        <ul class="plan-features">
+                            <li>Безлимит профилей</li>
+                            <li>Все типы мессенджеров</li>
+                            <li>Telegram User (MadelineProto)</li>
+                            <li>Приоритетная поддержка</li>
+                            <li>Аналитика сообщений</li>
+                        </ul>
+                        <button class="btn btn-primary btn-block"
+                            onclick="toast('Скоро будет доступно!','ok')">Попробовать бесплатно</button>
+                    </div>
+                    <div class="plan">
+                        <div class="plan-name">Business</div>
+                        <div class="plan-price">4 990 <span>₽</span></div>
+                        <div class="plan-period">в месяц · для команд</div>
+                        <div class="plan-divider"></div>
+                        <ul class="plan-features">
+                            <li>Всё из Pro</li>
+                            <li>Мультиаккаунт (до 5 юзеров)</li>
+                            <li>Выделенный сервер</li>
+                            <li>SLA 99.9%</li>
+                            <li>Персональный менеджер</li>
+                        </ul>
+                        <button class="btn btn-dark btn-block"
+                            onclick="toast('Свяжитесь с нами','ok')">Связаться</button>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-title">История платежей</div>
+                    <div class="empty" style="padding:24px 0">
+                        <span class="empty-ico" style="font-size:28px">◉</span>
+                        <div style="font-size:12px;color:var(--ink3)">Платежей пока нет</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ══════════════════════════════ DOCS ══════ -->
+            <div id="pDocs" class="page">
+                <div class="ph">
+                    <div class="ph-left">
+                        <div class="ph-title">Инструкция</div>
+                        <div class="ph-sub">Руководство по настройке и подключению</div>
+                    </div>
+                </div>
+
+                <div class="docs-grid" style="margin-bottom:28px">
+                    <div class="doc-card" onclick="stab('dtQuick',document.querySelectorAll('#pDocs .tab')[0])">
+                        <span class="doc-ico">⚡</span>
+                        <div>
+                            <div class="doc-title">Быстрый старт</div>
+                            <div class="doc-desc">Подключите первый мессенджер за 5 минут</div>
+                        </div>
+                        <span class="doc-arrow">→</span>
+                    </div>
+                    <div class="doc-card" onclick="stab('dtMax',document.querySelectorAll('#pDocs .tab')[1])">
+                        <span class="doc-ico">🟥</span>
+                        <div>
+                            <div class="doc-title">Подключение Max</div>
+                            <div class="doc-desc">Токен, webhook и настройки профиля</div>
+                        </div>
+                        <span class="doc-arrow">→</span>
+                    </div>
+                    <div class="doc-card" onclick="stab('dtTgbot',document.querySelectorAll('#pDocs .tab')[2])">
+                        <span class="doc-ico">🤖</span>
+                        <div>
+                            <div class="doc-title">Telegram Bot</div>
+                            <div class="doc-desc">Создание бота через @BotFather</div>
+                        </div>
+                        <span class="doc-arrow">→</span>
+                    </div>
+                    <div class="doc-card" onclick="stab('dtTgu',document.querySelectorAll('#pDocs .tab')[3])">
+                        <span class="doc-ico">👤</span>
+                        <div>
+                            <div class="doc-title">Telegram User</div>
+                            <div class="doc-desc">Авторизация через QR-код</div>
+                        </div>
+                        <span class="doc-arrow">→</span>
+                    </div>
+                </div>
+
+                <div class="tabs" id="docTabs">
+                    <button class="tab on" onclick="stab('dtQuick',this)">Быстрый старт</button>
+                    <button class="tab" onclick="stab('dtMax',this)">Max</button>
+                    <button class="tab" onclick="stab('dtTgbot',this)">Telegram Bot</button>
+                    <button class="tab" onclick="stab('dtTgu',this)">Telegram User</button>
+                </div>
+
+                <div id="dtQuick" class="tp on">
+                    <div class="card">
+                        <div class="card-title">Подключение за 5 шагов</div>
+                        <div class="steps-list">
+                            <div class="step-item">
+                                <div class="step-num"></div>
+                                <div class="step-content">
+                                    <div class="step-title">Установите приложение ConnectHub в Bitrix24</div>
+                                    <div class="step-desc">Зайдите в Bitrix24 → Приложения → Найдите ConnectHub и
+                                        установите.</div>
+                                </div>
+                            </div>
+                            <div class="step-item">
+                                <div class="step-num"></div>
+                                <div class="step-content">
+                                    <div class="step-title">Скопируйте API-токен</div>
+                                    <div class="step-desc">На странице «Обзор» скопируйте ваш API-токен — он понадобится
+                                        в настройках Bitrix24.</div>
+                                </div>
+                            </div>
+                            <div class="step-item">
+                                <div class="step-num"></div>
+                                <div class="step-content">
+                                    <div class="step-title">Создайте профиль мессенджера</div>
+                                    <div class="step-desc">Перейдите в «Профили» → «Добавить профиль». Выберите тип и
+                                        введите токен.</div>
+                                </div>
+                            </div>
+                            <div class="step-item">
+                                <div class="step-num"></div>
+                                <div class="step-content">
+                                    <div class="step-title">Активируйте коннектор в Bitrix24</div>
+                                    <div class="step-desc">CRM → Открытые линии → Подключить мессенджер → ConnectHub.
+                                        Введите API-токен.</div>
+                                    <div class="step-code">CRM → Открытые линии → Настройки → ConnectHub</div>
+                                </div>
+                            </div>
+                            <div class="step-item">
+                                <div class="step-num"></div>
+                                <div class="step-content">
+                                    <div class="step-title">Готово!</div>
+                                    <div class="step-desc">Напишите в мессенджер — сообщение появится в Bitrix24.
+                                        Отвечайте прямо из CRM.</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="dtMax" class="tp">
+                    <div class="card">
+                        <div class="card-title">Настройка Max</div>
+                        <div class="steps-list">
+                            <div class="step-item">
+                                <div class="step-num"></div>
+                                <div class="step-content">
+                                    <div class="step-title">Получите токен Max</div>
+                                    <div class="step-desc">Войдите в кабинет разработчика Max. Создайте бота или
+                                        перейдите в раздел «Токены».</div>
+                                    <div class="step-code">https://dev.max.ru → Боты → Токен API</div>
+                                </div>
+                            </div>
+                            <div class="step-item">
+                                <div class="step-num"></div>
+                                <div class="step-content">
+                                    <div class="step-title">Создайте профиль Max в ConnectHub</div>
+                                    <div class="step-desc">Профили → Добавить → Max. Вставьте токен, дайте название.
+                                        ConnectHub автоматически зарегистрирует webhook.</div>
+                                </div>
+                            </div>
+                            <div class="step-item">
+                                <div class="step-num"></div>
+                                <div class="step-content">
+                                    <div class="step-title">Привяжите к Bitrix24</div>
+                                    <div class="step-desc">Активируйте коннектор в Bitrix24 с вашим API-токеном. Профиль
+                                        Max автоматически привяжется к домену.</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="dtTgbot" class="tp">
+                    <div class="card">
+                        <div class="card-title">Настройка Telegram Bot</div>
+                        <div class="steps-list">
+                            <div class="step-item">
+                                <div class="step-num"></div>
+                                <div class="step-content">
+                                    <div class="step-title">Создайте бота через @BotFather</div>
+                                    <div class="step-desc">Откройте Telegram, напишите @BotFather команду /newbot.
+                                        Придумайте имя и username бота.</div>
+                                    <div class="step-code">@BotFather → /newbot → Получите токен</div>
+                                </div>
+                            </div>
+                            <div class="step-item">
+                                <div class="step-num"></div>
+                                <div class="step-content">
+                                    <div class="step-title">Создайте профиль Telegram Bot</div>
+                                    <div class="step-desc">Профили → Добавить → Telegram Bot. Вставьте Bot Token.
+                                        Webhook зарегистрируется автоматически.</div>
+                                </div>
+                            </div>
+                            <div class="step-item">
+                                <div class="step-num"></div>
+                                <div class="step-content">
+                                    <div class="step-title">Активируйте в Bitrix24</div>
+                                    <div class="step-desc">Аналогично Max — активируйте коннектор с вашим API-токеном
+                                        ConnectHub.</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="dtTgu" class="tp">
+                    <div class="card">
+                        <div class="card-title">Настройка Telegram User (MadelineProto)</div>
+                        <div class="ib warn">⚠ Функция доступна на тарифе Pro и выше</div>
+                        <div class="steps-list">
+                            <div class="step-item">
+                                <div class="step-num"></div>
+                                <div class="step-content">
+                                    <div class="step-title">Создайте профиль Telegram User</div>
+                                    <div class="step-desc">Профили → Добавить → Telegram User (MadelineProto). Токен не
+                                        нужен — нажмите «Создать профиль».</div>
+                                </div>
+                            </div>
+                            <div class="step-item">
+                                <div class="step-num"></div>
+                                <div class="step-content">
+                                    <div class="step-title">Авторизуйтесь через QR-код</div>
+                                    <div class="step-desc">В карточке профиля нажмите «Авторизовать». Отсканируйте QR в
+                                        Telegram: Настройки → Устройства → Войти через QR.</div>
+                                </div>
+                            </div>
+                            <div class="step-item">
+                                <div class="step-num"></div>
+                                <div class="step-content">
+                                    <div class="step-title">Привяжите к Bitrix24</div>
+                                    <div class="step-desc">После авторизации активируйте коннектор в Bitrix24. Входящие
+                                        личные сообщения будут появляться в CRM.</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ══════════════════════════════ SUPPORT ══════ -->
+            <div id="pSupport" class="page">
+                <div class="ph">
+                    <div class="ph-left">
+                        <div class="ph-title">Поддержка</div>
+                        <div class="ph-sub">Мы всегда рядом</div>
+                    </div>
+                </div>
+
+                <div class="support-grid" style="margin-bottom:24px">
+                    <a href="https://t.me/connecthub_support" target="_blank" class="contact-card">
+                        <div class="contact-ico" style="background:rgba(6,182,212,.1);color:var(--cyan)">✈</div>
+                        <div>
+                            <div class="contact-label">Telegram</div>
+                            <div class="contact-value">@connecthub_support</div>
+                            <div class="contact-sub">Ответим в течение 1 часа</div>
+                        </div>
+                    </a>
+                    <a href="mailto:support@connecthub.ru" class="contact-card">
+                        <div class="contact-ico" style="background:rgba(79,110,247,.1);color:var(--accent)">✉</div>
+                        <div>
+                            <div class="contact-label">Email</div>
+                            <div class="contact-value">support@connecthub.ru</div>
+                            <div class="contact-sub">Ответим в течение 24 часов</div>
+                        </div>
+                    </a>
+                </div>
+
+                <div class="card" style="margin-bottom:24px">
+                    <div class="card-title">Написать в поддержку</div>
+                    <div class="mf">
+                        <label>Тема</label>
+                        <select id="ticketTopic">
+                            <option>Проблема с профилем</option>
+                            <option>Webhook не работает</option>
+                            <option>Вопрос по оплате</option>
+                            <option>Запрос функции</option>
+                            <option>Другое</option>
+                        </select>
+                    </div>
+                    <div class="mf ticket-form">
+                        <label>Сообщение</label>
+                        <textarea id="ticketMsg"
+                            placeholder="Опишите проблему подробно. Укажите домен Bitrix24, тип мессенджера и что именно не работает..."></textarea>
+                    </div>
+                    <button class="btn btn-primary" onclick="sendTicket()">Отправить</button>
+                </div>
+
+                <div class="card">
+                    <div class="card-title">Частые вопросы</div>
+                    <div class="faq-item">
+                        <div class="faq-q" onclick="toggleFaq(this)">Почему сообщения не приходят в Bitrix24?<span
+                                class="faq-arrow">▾</span></div>
+                        <div class="faq-a">
+                            <div class="faq-a-inner">Проверьте: 1) Профиль создан и активен; 2) Коннектор активирован в
+                                Bitrix24 с правильным API-токеном; 3) Таблица <code>profile_bitrix_connections</code>
+                                содержит запись для вашего профиля.</div>
+                        </div>
+                    </div>
+                    <div class="faq-item">
+                        <div class="faq-q" onclick="toggleFaq(this)">Как зарегистрировать webhook повторно?<span
+                                class="faq-arrow">▾</span></div>
+                        <div class="faq-a">
+                            <div class="faq-a-inner">Отредактируйте профиль — смените токен на тот же самый (система
+                                автоматически пересоздаст webhook). Либо удалите профиль и создайте заново.</div>
+                        </div>
+                    </div>
+                    <div class="faq-item">
+                        <div class="faq-q" onclick="toggleFaq(this)">Можно ли подключить несколько мессенджеров к одному
+                            домену Bitrix24?<span class="faq-arrow">▾</span></div>
+                        <div class="faq-a">
+                            <div class="faq-a-inner">Да. Создайте несколько профилей и активируйте коннектор один раз.
+                                Все профили вашего аккаунта автоматически привяжутся к домену.</div>
+                        </div>
+                    </div>
+                    <div class="faq-item">
+                        <div class="faq-q" onclick="toggleFaq(this)">Что делать если API-токен скомпрометирован?<span
+                                class="faq-arrow">▾</span></div>
+                        <div class="faq-a">
+                            <div class="faq-a-inner">Перегенерируйте токен на странице «Обзор» или в «Настройки →
+                                API-токен». После перегенерации вставьте новый токен в настройки Bitrix24.</div>
+                        </div>
+                    </div>
+                    <div class="faq-item">
+                        <div class="faq-q" onclick="toggleFaq(this)">Как работает Telegram User (MadelineProto)?<span
+                                class="faq-arrow">▾</span></div>
+                        <div class="faq-a">
+                            <div class="faq-a-inner">MadelineProto позволяет получать личные сообщения Telegram (не
+                                через бота). Авторизация через QR-код — сессия сохраняется на сервере.</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ══════════════════════════════ SETTINGS ══════ -->
+            <div id="pSettings" class="page">
+                <div class="ph">
+                    <div class="ph-left">
+                        <div class="ph-title">Настройки</div>
+                        <div class="ph-sub">Управление аккаунтом</div>
+                    </div>
+                </div>
+                <div class="tabs">
+                    <button class="tab on" onclick="stab('stProfile',this)">Профиль</button>
+                    <button class="tab" onclick="stab('stPassword',this)">Пароль</button>
+                    <button class="tab" onclick="stab('stToken',this)">API-токен</button>
+                </div>
+
+                <div id="stProfile" class="tp on" style="max-width:440px">
+                    <div class="card">
+                        <div class="mf"><label>Имя</label><input type="text" id="sName" placeholder="Ваше имя"></div>
+                        <div class="mf"><label>Email</label><input type="email" id="sEmail" disabled
+                                style="opacity:.4;cursor:not-allowed"></div>
+                        <button class="btn btn-primary" onclick="saveName()">Сохранить</button>
+                    </div>
+                </div>
+
+                <div id="stPassword" class="tp" style="max-width:440px">
+                    <div class="card">
+                        <div class="mf"><label>Текущий пароль</label><input type="password" id="curPass"
+                                placeholder="••••••••"></div>
+                        <div class="mf"><label>Новый пароль</label><input type="password" id="newPass"
+                                placeholder="мин. 8 символов"></div>
+                        <button class="btn btn-primary" onclick="savePass()">Изменить пароль</button>
+                    </div>
+                </div>
+
+                <div id="stToken" class="tp" style="max-width:560px">
+                    <div class="card">
+                        <div class="card-title">API-токен аккаунта</div>
+                        <div class="ib">Вставьте этот токен в настройки Bitrix24 при активации коннектора. Не
+                            передавайте токен посторонним — он даёт полный доступ к вашим профилям.</div>
+                        <div
+                            style="background:var(--surface);border:1px solid var(--border2);border-radius:var(--r2);padding:14px 16px;font-family:var(--mono);font-size:12px;word-break:break-all;color:var(--ink2);line-height:1.8;display:flex;align-items:flex-start;gap:12px;margin-bottom:16px">
+                            <div style="flex:1" id="settingsToken">—</div>
+                            <button class="btn btn-outline btn-sm" onclick="copyToken()">Копировать</button>
+                        </div>
+                        <button class="btn btn-danger btn-sm" onclick="regenToken()">⚠ Перегенерировать токен</button>
+                        <div style="font-size:11px;color:var(--ink3);margin-top:10px;line-height:1.6">После
+                            перегенерации старый токен немедленно перестанет работать. Нужно вставить новый токен в
+                            настройки Bitrix24.</div>
+                    </div>
+                </div>
+            </div>
+
+        </main>
+    </div>
+
+    <!-- ══════════════════════════ MODAL: New Profile ══════ -->
+    <div class="mb" id="mNew">
+        <div class="modal">
+            <div class="mh">
+                <div class="mh-t">Новый профиль</div>
+                <button class="mclose" onclick="closeM('mNew')">✕</button>
+            </div>
+            <div class="mbody">
+                <!-- Выбор типа мессенджера — карточки -->
+                <div class="mf">
+                    <label>Тип мессенджера</label>
+                    <div class="messenger-picker">
+                        <button class="mp-card" data-type="max" onclick="pickMessenger('max', this)">
+                            <div class="mp-icon" style="background:rgba(239,68,68,.12)">🟥</div>
+                            <div class="mp-info">
+                                <div class="mp-name">Max</div>
+                                <div class="mp-desc">Токен из кабинета разработчика</div>
+                            </div>
+                            <div class="mp-check">✓</div>
+                        </button>
+                        <button class="mp-card" data-type="telegram_bot" onclick="pickMessenger('telegram_bot', this)">
+                            <div class="mp-icon" style="background:rgba(6,182,212,.1)">🤖</div>
+                            <div class="mp-info">
+                                <div class="mp-name">Telegram Bot</div>
+                                <div class="mp-desc">Токен от @BotFather</div>
+                            </div>
+                            <div class="mp-check">✓</div>
+                        </button>
+                        <button class="mp-card" data-type="telegram_user"
+                            onclick="pickMessenger('telegram_user', this)">
+                            <div class="mp-icon" style="background:rgba(167,139,250,.1)">👤</div>
+                            <div class="mp-info">
+                                <div class="mp-name">Telegram User</div>
+                                <div class="mp-desc">MadelineProto · авторизация через QR</div>
+                            </div>
+                            <div class="mp-check">✓</div>
+                        </button>
+                    </div>
+                </div>
+
+                <div class="ib" id="npHint" style="display:none"></div>
+                <div class="mf"><label>Название профиля</label><input type="text" id="npName"
+                        placeholder="Например: Основной Max"></div>
+                <div class="mf" id="npTokenF" style="display:none">
+                    <label id="npTokenL">Токен</label>
+                    <input type="text" id="npToken" placeholder="">
+                    <div class="mferr" id="npTokenE"></div>
+                </div>
+            </div>
+            <div class="mfooter">
+                <button class="btn btn-outline" onclick="closeM('mNew')">Отмена</button>
+                <button class="btn btn-primary" onclick="submitNew()">Создать профиль</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ══════════════════════════ MODAL: Edit Profile ══════ -->
+    <div class="mb" id="mEdit">
+        <div class="modal">
+            <div class="mh">
+                <div class="mh-t" id="mEditTitle">Профиль</div>
+                <button class="mclose" onclick="closeM('mEdit')">✕</button>
+            </div>
+            <div class="mbody" id="mEditBody"></div>
+            <div class="mfooter">
+                <button class="btn btn-danger btn-sm" id="mEditDel">Удалить профиль</button>
+                <button class="btn btn-outline" onclick="closeM('mEdit')">Закрыть</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ══════════════════════════ CONFIRM ══════ -->
+    <div id="confirmBox">
+        <div class="cb">
+            <div class="cb-t" id="cbTitle">Подтвердите</div>
+            <div class="cb-s" id="cbText"></div>
+            <div class="cb-btns">
+                <button class="btn btn-outline btn-sm" onclick="cbDone(false)">Отмена</button>
+                <button class="btn btn-danger btn-sm" onclick="cbDone(true)">Подтвердить</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="toast"></div>
+
+    <script>
+        function sendTicket() {
+            const msg = document.getElementById('ticketMsg').value.trim();
+            if (!msg) return toast('Напишите сообщение', 'err');
+            toast('Сообщение отправлено! Ответим в ближайшее время', 'ok');
+            document.getElementById('ticketMsg').value = '';
+        }
+    </script>
+    <script src="app.js"></script>
+</body>
+
+</html>
